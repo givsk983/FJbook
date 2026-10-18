@@ -1,0 +1,5 @@
+<resources>
+    <color name="theme_accent">#79551C</color>
+    <color name="theme_background">#FAF7F0</color>
+    <bool name="light_system_bars">true</bool>
+</resources>

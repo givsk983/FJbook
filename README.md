@@ -1,12 +1,11 @@
 # 封禁手册
 
-个人离线游戏封禁管理 Android App，当前版本 **0.2.2**。无需登录或 Root，Android 8.0 及以上。
+个人离线游戏封禁管理 Android App，当前版本 **0.2.3**。无需登录或 Root，Android 8.0 及以上。
 
-## 0.2.2 更新
+## 0.2.3 更新
 
-- 新增独立游戏名称与图标库，支持收集、搜索选择和导入导出分享。
-- 添加游戏时可从游戏库选择，或手动填写名称与图标。
-- 导入 / 恢复窗口新增游戏库入口，与个人备份分开管理。
+- 新增浅色模式，自动跟随手机系统的浅色 / 深色设置。
+- 适配卡片、文字、弹窗和系统栏，保留深色黑金风格。
 
 [下载最新版](https://github.com/yunhe4550-design/Termination-Handbook/releases/latest) · [反馈](https://t.me/mbazhuan)
 
@@ -59,7 +58,7 @@
 .\scripts\build.ps1 -SdkRoot C:\Users\1657322\AppData\Local\Android\Sdk
 ```
 
-需要 JDK 17 或以上、Android SDK Platform 36。输出 `dist/chendian-0.2.2.apk`。旧的纯 Java 手工编译流程已由 Gradle 替代。若存在 `build/manual/debug.keystore`，Gradle 会继续使用原调试签名以支持覆盖安装；否则使用标准 Android 调试签名。
+需要 JDK 17 或以上、Android SDK Platform 36。输出 `dist/chendian-0.2.3.apk`。旧的纯 Java 手工编译流程已由 Gradle 替代。若存在 `build/manual/debug.keystore`，Gradle 会继续使用原调试签名以支持覆盖安装；否则使用标准 Android 调试签名。
 
 本次产物是可安装的调试版，不是正式发行签名版。
 
@@ -69,7 +68,7 @@
 .\scripts\test.ps1
 python scripts\test_schema.py
 .\scripts\build-tests.ps1
-adb install -r dist/chendian-0.2.2.apk
+adb install -r dist/chendian-0.2.3.apk
 adb install -r dist/chendian-tests.apk
 adb shell am instrument -w cn.chendian.app.test/cn.chendian.app.AppTests
 ```
