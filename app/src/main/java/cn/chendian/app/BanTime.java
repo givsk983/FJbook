@@ -12,8 +12,11 @@ public final class BanTime {
         return end <= now ? DUE : ACTIVE;
     }
     public static long end(long start, long days, long hours, long minutes) {
-        if (days<0 || hours<0 || minutes<0) throw new IllegalArgumentException("时长不能为负数");
-        long duration=Math.addExact(Math.addExact(Math.multiplyExact(days,86400000L),Math.multiplyExact(hours,3600000L)),Math.multiplyExact(minutes,60000L));
+        return end(start,days,hours,minutes,0);
+    }
+    public static long end(long start, long days, long hours, long minutes, long seconds) {
+        if (days<0 || hours<0 || minutes<0 || seconds<0) throw new IllegalArgumentException("时长不能为负数");
+        long duration=Math.addExact(Math.addExact(Math.addExact(Math.multiplyExact(days,86400000L),Math.multiplyExact(hours,3600000L)),Math.multiplyExact(minutes,60000L)),Math.multiplyExact(seconds,1000L));
         if(duration<=0) throw new IllegalArgumentException("封禁时长必须大于零");
         return Math.addExact(start,duration);
     }
@@ -23,7 +26,7 @@ public final class BanTime {
     public static boolean soon(long end, long now) { return end>now && end-now<=86400000L; }
     public static String remaining(long end, long now) {
         if(end<=now) return "等待确认解封";
-        long m=(end-now+59999)/60000;
-        return (m>=1440 ? (m/1440)+"天 " : "")+(m%1440/60)+"小时 "+(m%60)+"分";
+        long delta=Math.subtractExact(end,now),s=delta/1000+(delta%1000==0?0:1);
+        return (s>=86400 ? (s/86400)+"天 " : "")+(s%86400/3600)+"小时 "+(s%3600/60)+"分 "+(s%60)+"秒";
     }
 }

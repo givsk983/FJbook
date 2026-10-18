@@ -29,7 +29,7 @@ def sql_statements(body):
             yield sql
 
 schema = list(sql_statements(method_body('onCreate')))
-assert len(schema) == 13, len(schema)
+assert len(schema) == 14, len(schema)
 db = sqlite3.connect(':memory:')
 db.execute('PRAGMA foreign_keys=ON')
 for statement in schema:
@@ -67,6 +67,11 @@ check(rejected("INSERT INTO accounts VALUES('bad','QQ','','昵称一')"), 'nickn
 check(db.execute("SELECT count(*) FROM accounts WHERE identifier=''").fetchone()[0] == 3, 'distinct nickname-only accounts and login types')
 check(rejected("INSERT INTO roles VALUES('u','a','z','888','重复')"), 'unique role in account and region')
 check(rejected("INSERT INTO roles VALUES('u','missing','z','99','孤儿')"), 'no orphan role')
+db.execute("INSERT INTO avatars VALUES('account-avatar','a',NULL,'account.img')")
+db.execute("INSERT INTO avatars VALUES('game-avatar',NULL,'g','game.img')")
+check(rejected("INSERT INTO avatars VALUES('duplicate','a',NULL,'another.img')"), 'only one avatar per account')
+check(rejected("INSERT INTO avatars VALUES('invalid','a','g','invalid.img')"), 'avatar has exactly one owner')
+check(rejected("INSERT INTO avatars VALUES('orphan','missing',NULL,'orphan.img')"), 'avatar requires valid owner')
 db.execute("INSERT INTO regions VALUES('android','g','一区','安卓')")
 db.execute("INSERT INTO regions VALUES('ios','g','一区','苹果')")
 db.execute("INSERT INTO regions VALUES('cross','g','','全平台')")
@@ -98,9 +103,11 @@ db.execute("DELETE FROM accounts WHERE id='a'")
 check(db.execute('SELECT count(*) FROM bans').fetchone()[0] == 1, 'account cascade removes only its bans')
 check(db.execute('SELECT count(*) FROM attachments').fetchone()[0] == 0, 'attachment cascade')
 check(db.execute('SELECT count(*) FROM games').fetchone()[0] == 1, 'shared game retained')
+check(db.execute('SELECT count(*) FROM avatars').fetchone()[0] == 1, 'account deletion retains only game avatar')
 db.execute("DELETE FROM games WHERE id='g'")
 check(db.execute('SELECT count(*) FROM roles').fetchone()[0] == 0, 'game cascade')
 check(db.execute('SELECT count(*) FROM bans').fetchone()[0] == 0, 'shared game cascade removes remaining history')
+check(db.execute('SELECT count(*) FROM avatars').fetchone()[0] == 0, 'game deletion removes game avatar')
 
 # Replay the actual upgrade SQL against a v1 DB containing linked records.
 legacy = sqlite3.connect(':memory:')
@@ -143,4 +150,9 @@ check(v2.execute('SELECT identifier,name FROM accounts').fetchall() == [('wx-old
 check(v2.execute('SELECT platform FROM regions').fetchall() == [('全平台',)], 'v2 upgrade platform preserved')
 v2.execute("INSERT INTO accounts VALUES('new','微信','','只有昵称')")
 check(v2.execute('SELECT count(*) FROM bans').fetchone()[0] == 1, 'v2 upgrade preserves history while allowing nickname-only accounts')
+# A v3 upgrade only adds the avatar table and preserves all existing records.
+v2.execute(constants['AVATARS_SQL'])
+v2.execute("INSERT INTO avatars VALUES('avatar','a',NULL,'avatar.img')")
+check(not v2.execute('PRAGMA foreign_key_check').fetchall(), 'v3 avatar migration retains relationships')
+check(v2.execute('SELECT count(*) FROM bans').fetchone()[0] == 1, 'v3 avatar migration retains bans')
 print(f'PASS {checks} SQLite hierarchy and transaction assertions')

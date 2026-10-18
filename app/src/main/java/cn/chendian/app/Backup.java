@@ -15,13 +15,14 @@ public final class Backup {
     public static File directory(Context c) { File f=new File(c.getFilesDir(),"attachments");f.mkdirs();return f; }
     public static void prune(Context c,Store s) {
         Set<String> live=new HashSet<>();for(JSONObject a:s.query("SELECT file FROM attachments"))live.add(a.optString("file"));
+        for(JSONObject a:s.query("SELECT file FROM avatars"))live.add(a.optString("file"));
         File[] all=directory(c).listFiles();if(all!=null)for(File f:all)if(!live.contains(f.getName()))f.delete();
     }
     public static void write(Context c,Store s,OutputStream stream) throws Exception {
         JSONObject data=s.snapshot();
         byte[] manifest=data.toString(2).getBytes(StandardCharsets.UTF_8);long total=manifest.length;
         if(manifest.length>8*1024*1024)throw new IOException("备份清单超过 8 MB 限制");
-        Set<String> checked=new HashSet<>();JSONArray attachments=data.getJSONArray("attachments");
+        Set<String> checked=new HashSet<>();JSONArray attachments=media(data);
         for(int i=0;i<attachments.length();i++) {
             String name=attachments.getJSONObject(i).getString("file");if(!checked.add(name))continue;
             File f=new File(directory(c),name);if(!f.isFile())throw new IOException("附件缺失，无法创建完整备份");
@@ -29,13 +30,20 @@ public final class Backup {
         }
         try(ZipOutputStream zip=new ZipOutputStream(new BufferedOutputStream(stream))) {
             zip.putNextEntry(new ZipEntry("manifest.json"));zip.write(manifest);zip.closeEntry();
-            Set<String> done=new HashSet<>();JSONArray files=data.getJSONArray("attachments");
+            Set<String> done=new HashSet<>();JSONArray files=media(data);
             for(int i=0;i<files.length();i++) {
                 String name=files.getJSONObject(i).getString("file");if(!done.add(name))continue;
                 File f=new File(directory(c),name);if(!f.isFile())throw new IOException("附件缺失，无法创建完整备份");
                 zip.putNextEntry(new ZipEntry("attachments/"+name));Files.copy(f.toPath(),zip);zip.closeEntry();
             }
         }
+    }
+    static JSONArray media(JSONObject data)throws JSONException {
+        JSONArray result=new JSONArray();
+        for(String table:new String[]{"attachments","avatars"}) {
+            JSONArray rows=data.optJSONArray(table);if(rows!=null)for(int i=0;i<rows.length();i++)result.put(rows.getJSONObject(i));
+        }
+        return result;
     }
     static byte[] bytes(InputStream in,long max) throws IOException {
         ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[16384];int n;
@@ -47,7 +55,8 @@ public final class Backup {
     static boolean safeName(String f) { return f.matches("[a-zA-Z0-9_-]{1,100}\\.(jpg|png|webp|gif|img)"); }
     static void validate(JSONObject root,Map<String,File> files) throws Exception {
         int version=root.getInt("version");
-        if(!"chendian-backup".equals(root.getString("format"))||version<1||version>3)throw new IOException("不是支持的封禁手册备份（版本 1 / 2 / 3）");
+        if(!"chendian-backup".equals(root.getString("format"))||version<1||version>4)throw new IOException("不是支持的封禁手册备份（版本 1–4）");
+        if(version<4)root.put("avatars",new JSONArray());
         Map<String,Set<String>> ids=new HashMap<>();
         for(String table:Store.TABLES) {
             JSONArray rows=root.getJSONArray(table);if(rows.length()>100000)throw new IOException("记录数量过大");
@@ -81,6 +90,12 @@ public final class Backup {
                         row.getString("reason");row.getString("note");break;
                     case "attachments": ref(ids,"bans",row,"banId");String f=required(row,"file");
                         if(!safeName(f)||!files.containsKey(f)||!row.getString("mime").startsWith("image/"))throw new IOException("附件缺失或无效");break;
+                    case "avatars":
+                        boolean hasAccount=!row.isNull("accountId"),hasGame=!row.isNull("gameId");
+                        if(hasAccount==hasGame)throw new IOException("头像归属无效");
+                        if(hasAccount)ref(ids,"accounts",row,"accountId");else ref(ids,"games",row,"gameId");
+                        String avatarFile=required(row,"file");
+                        if(!safeName(avatarFile)||!files.containsKey(avatarFile))throw new IOException("头像文件缺失或无效");break;
                     case "settings": String value=row.getString("value");if(id.equals("defaultRemind")&&!value.matches("[0-3]"))throw new IOException("默认提醒配置无效");break;
                 }
             }
@@ -141,6 +156,14 @@ public final class Backup {
                                 String newFile=Store.uuid()+oldFile.substring(oldFile.lastIndexOf('.'));File dest=new File(directory(c),newFile);
                                 Files.copy(files.get(oldFile).toPath(),dest.toPath());copied.add(dest);
                                 row.put("id",s.one("SELECT id FROM attachments WHERE id=?",source)==null?source:Store.uuid()).put("banId",bid).put("file",newFile);insert(db,table,row);break;
+                            case "avatars":
+                                boolean accountAvatar=!row.isNull("accountId");
+                                String ownerKey=accountAvatar?"accountId":"gameId";
+                                String owner=(accountAvatar?account:game).get(row.getString(ownerKey));
+                                if(s.one("SELECT id FROM avatars WHERE "+ownerKey+"=?",owner)!=null)break;
+                                String oldAvatar=row.getString("file"),newAvatar=Store.uuid()+oldAvatar.substring(oldAvatar.lastIndexOf('.'));
+                                File avatarDest=new File(directory(c),newAvatar);Files.copy(files.get(oldAvatar).toPath(),avatarDest.toPath());copied.add(avatarDest);
+                                row.put("id",s.one("SELECT id FROM avatars WHERE id=?",source)==null?source:Store.uuid()).put(ownerKey,owner).put("file",newAvatar);insert(db,table,row);break;
                             case "settings":
                                 if(replace||s.one("SELECT id FROM settings WHERE id=?",source)==null)s.setting(source,row.getString("value"));break;
                         }
@@ -155,7 +178,7 @@ public final class Backup {
         } finally { File[] temp=stage.listFiles();if(temp!=null)for(File f:temp)f.delete();stage.delete(); }
     }
     static void insert(SQLiteDatabase db,String table,JSONObject row)throws JSONException {
-        ContentValues values=new ContentValues();Iterator<String> keys=row.keys();while(keys.hasNext()){String key=keys.next();Object v=row.get(key);if(v instanceof Number)values.put(key,((Number)v).longValue());else values.put(key,v.toString());}db.insertOrThrow(table,null,values);
+        ContentValues values=new ContentValues();Iterator<String> keys=row.keys();while(keys.hasNext()){String key=keys.next();Object v=row.get(key);if(v==JSONObject.NULL)values.putNull(key);else if(v instanceof Number)values.put(key,((Number)v).longValue());else values.put(key,v.toString());}db.insertOrThrow(table,null,values);
     }
     static String entity(Store s,String table,JSONObject row,String where,String...args)throws JSONException {
         JSONObject old=s.one("SELECT id FROM "+table+" WHERE "+where,args);if(old!=null)return old.getString("id");

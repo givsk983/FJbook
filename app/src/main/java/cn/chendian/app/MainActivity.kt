@@ -2,7 +2,6 @@ package cn.chendian.app
 
 import android.Manifest
 import android.app.DatePickerDialog
-import android.app.TimePickerDialog
 import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
@@ -20,6 +19,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -34,6 +35,10 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -52,10 +57,10 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private val ReminderLabels = listOf("不提醒", "到期当天", "提前一天", "两者都提醒")
-private val DateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+private val DateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 private fun formatted(time: Long) = Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault()).format(DateFormat)
-private fun status(b: JSONObject) = BanTime.state(b.optLong("start"), b.optLong("end"),
-    b.optInt("permanent") == 1, b.optLong("confirmed"), System.currentTimeMillis())
+private fun status(b: JSONObject, now: Long = System.currentTimeMillis()) = BanTime.state(b.optLong("start"), b.optLong("end"),
+    b.optInt("permanent") == 1, b.optLong("confirmed"), now)
 private fun JSONObject.title() = optString("name").ifBlank { optString("identifier") }
 private fun JSONObject.accountLabel(ban: Boolean = false) = listOf(optString("type"), optString("identifier").ifBlank { optString(if (ban) "accountName" else "name") }).filter { it.isNotBlank() }.joinToString(" · ")
 private val Platforms = listOf("全平台", "安卓", "苹果", "鸿蒙", "PC")
@@ -107,15 +112,18 @@ class MainActivity : ComponentActivity() {
         var byAccount by rememberSaveable { mutableStateOf(store.one("SELECT value FROM settings WHERE id=?", "overviewMode")?.optString("value") == "account") }
         var overviewAccount by rememberSaveable { mutableStateOf(store.one("SELECT value FROM settings WHERE id=?", "overviewAccount")?.optString("value") ?: "") }
         var revision by remember { mutableIntStateOf(0) }
+        var clockTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
         var editor by remember { mutableStateOf<Editor?>(null) }
         var confirmation by remember { mutableStateOf<Confirmation?>(null) }
         var managingGames by remember { mutableStateOf(false) }
         var restoreOpen by remember { mutableStateOf(false) }
+        var importOpen by rememberSaveable { mutableStateOf(false) }
         var replace by remember { mutableStateOf(false) }
         var busy by remember { mutableStateOf<String?>(null) }
         var preview by remember { mutableStateOf<File?>(null) }
         val scope = rememberCoroutineScope()
         val listState = rememberLazyListState()
+        LaunchedEffect(Unit) { if (tab !in 0..2) tab = 2 }
         LaunchedEffect(tab, detail, role) { listState.scrollToItem(0) }
 
         fun refresh() {
@@ -180,7 +188,7 @@ class MainActivity : ComponentActivity() {
             notificationBan?.let { if (store.ban(it) != null) { detail = it; role = null } else toast("这条记录已删除") }
             notificationBan = null
         }
-        LaunchedEffect(Unit) { while (true) { delay(60_000); revision++ } }
+        LaunchedEffect(Unit) { while (true) { delay(1_000); clockTime = System.currentTimeMillis() } }
         val latestPreview by rememberUpdatedState(preview)
         DisposableEffect(Unit) { onDispose { latestPreview?.delete() } }
         BackHandler(detail != null || role != null || tab != 0 || busy != null) {
@@ -190,6 +198,9 @@ class MainActivity : ComponentActivity() {
         val current = remember(revision) { store.currentIds() }
         val games = remember(revision) { store.query("SELECT * FROM games ORDER BY name") }
         val accounts = remember(revision) { store.query("SELECT * FROM accounts ORDER BY type,CASE WHEN identifier='' THEN name ELSE identifier END") }
+        val avatars = remember(revision) { store.query("SELECT * FROM avatars") }
+        val accountAvatars = avatars.filter { it.has("accountId") }.associate { it.optString("accountId") to it.optString("file") }
+        val gameAvatars = games.associate { g -> g.optString("name") to avatars.firstOrNull { it.optString("gameId") == g.optString("id") }?.optString("file").orEmpty() }
         LaunchedEffect(games, game) { if (game != "全部游戏" && games.none { it.optString("name") == game }) { game = "全部游戏"; store.setting("overviewGame", game) } }
         LaunchedEffect(accounts, overviewAccount) {
             if (overviewAccount.isNotEmpty() && accounts.none { it.optString("id") == overviewAccount }) {
@@ -197,13 +208,30 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        Scaffold(containerColor = Background, bottomBar = {
+        Scaffold(containerColor = Background, topBar = {
+            if (tab == 0 && detail == null && role == null) {
+                Surface(color = Background, modifier = Modifier.statusBarsPadding()) {
+                    OutlinedTextField(value = search, onValueChange = { search = it },
+                        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 12.dp),
+                        singleLine = true, placeholder = { Text("搜索账号 / 角色 / 备注") }, shape = MaterialTheme.shapes.large)
+                }
+            }
+        }, bottomBar = {
+            Column {
+                if (tab == 1 && detail == null && role == null) {
+                    Surface(color = Background) {
+                        Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
+                            FilledTonalButton(onClick = { importOpen = true }, enabled = busy == null) { Text("↓ 导入") }
+                        }
+                    }
+                }
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                listOf("总览", "账号", "导入", "设置").forEachIndexed { index, title ->
+                listOf("总览", "账号", "设置").forEachIndexed { index, title ->
                     NavigationBarItem(selected = tab == index, enabled = busy == null,
                         onClick = { tab = index; detail = null; role = null },
-                        icon = { Text(listOf("◈", "◎", "↓", "⚙")[index], fontSize = 23.sp) }, label = { Text(title) })
+                        icon = { Text(listOf("◈", "◎", "⚙")[index], fontSize = 23.sp) }, label = { Text(title) })
                 }
+            }
             }
         }) { padding ->
             LazyColumn(Modifier.fillMaxSize().padding(padding), state = listState, contentPadding = PaddingValues(20.dp),
@@ -214,12 +242,12 @@ class MainActivity : ComponentActivity() {
                     selectedBan != null -> {
                         val b = selectedBan; val id = b.optString("id")
                         item { TextButton(onClick = { detail = null }) { Text("‹ 返回") }; Heading(b.optString("game"), "${b.location()} · ${b.roleLabel()}") }
-                        item { BanCard(b, current.contains(id)) {} }
+                        item { BanCard(b, current.contains(id), clockTime) {} }
                         item { GoldPanel {
                             val values = listOf("账号" to b.accountLabel(true),
                                 "昵称" to b.optString("nickname"), "封禁开始" to formatted(b.optLong("start")),
                                 "预计解封" to if (b.optInt("permanent") == 1) "永久" else formatted(b.optLong("end")),
-                                "封禁时长" to if (b.optInt("permanent") == 1) "永久" else ((b.optLong("end") - b.optLong("start")) / 60000).let { "${it / 1440}天 ${it % 1440 / 60}小时 ${it % 60}分钟" },
+                                "封禁时长" to if (b.optInt("permanent") == 1) "永久" else durationText(b.optLong("end") - b.optLong("start")),
                                 "实际确认解封" to if (b.optLong("confirmed") > 0) formatted(b.optLong("confirmed")) else "尚未确认",
                                 "提醒" to ReminderLabels[b.optInt("remind").coerceIn(0, 3)], "原因" to b.optString("reason"), "备注" to b.optString("note"))
                             values.forEach { (label, value) -> Text(label, color = Gold, style = MaterialTheme.typography.labelMedium); androidx.compose.foundation.text.selection.SelectionContainer { Text(value.ifBlank { "未填写" }) } }
@@ -240,10 +268,17 @@ class MainActivity : ComponentActivity() {
                         item { Action("＋ 新增一次封禁") { editor = Editor.Ban(r.optString("id")) }; Action("编辑角色") { editor = Editor.Role(r.optString("accountId"), r) } }
                         val records = bans.filter { it.optString("roleId") == r.optString("id") }
                         if (records.isEmpty()) item { Empty("这个角色还没有封禁记录") }
-                        items(records, key = { it.optString("id") }) { BanCard(it, current.contains(it.optString("id"))) { detail = it.optString("id") } }
+                        items(records, key = { it.optString("id") }) { BanCard(it, current.contains(it.optString("id")), clockTime) { detail = it.optString("id") } }
                     }
                     tab == 0 -> {
-                        item { Heading("总览") }
+                        // Each mode scopes independently; a previous game selection must not hide an account's other games.
+                        val active = bans.filter { b -> current.contains(b.optString("id")) &&
+                            if (byAccount) overviewAccount.isEmpty() || overviewAccount == b.optString("accountId")
+                            else game == "全部游戏" || game == b.optString("game") }
+                        item { GoldPanel { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            val now = clockTime
+                            listOf("封禁中角色" to active.count { status(it) == BanTime.ACTIVE }, "今日预计解封" to active.count { it.optInt("permanent") == 0 && it.optLong("confirmed") == 0L && BanTime.today(it.optLong("end"), now, ZoneId.systemDefault()) }, "永久封禁" to active.count { status(it) == BanTime.PERMANENT }).forEach { (label, count) -> Column { Text("$count", fontSize = 28.sp, color = Gold); Text(label, fontSize = 11.sp, color = Muted) } }
+                        } } }
                         item { SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                             listOf("按游戏", "按账号").forEachIndexed { index, label ->
                                 SegmentedButton(selected = byAccount == (index == 1),
@@ -258,25 +293,17 @@ class MainActivity : ComponentActivity() {
                                     val id = a.optString("id")
                                     FilterChip(selected = overviewAccount == id,
                                         onClick = { overviewAccount = id; store.setting("overviewAccount", id) },
+                                        leadingIcon = { Avatar(accountAvatars[id].orEmpty(), a.title(), 24.dp) },
                                         label = { Text("${a.title()} · ${a.optString("type")}" + if (a.optString("name").isNotBlank() && a.optString("identifier").isNotBlank()) " · ${a.optString("identifier")}" else "") })
                                 }
                             } else {
-                            (listOf("全部游戏") + games.map { it.optString("name") }).forEach { name -> FilterChip(selected = game == name, onClick = { game = name; store.setting("overviewGame", name) }, label = { Text(name) }) }
-                            AssistChip(onClick = { editor = Editor.Name("添加游戏", "") { store.ensureGame(it) } }, label = { Text("＋ 游戏") })
+                            (listOf("全部游戏") + games.map { it.optString("name") }).forEach { name -> FilterChip(selected = game == name, onClick = { game = name; store.setting("overviewGame", name) }, leadingIcon = if (name == "全部游戏") null else { { Avatar(gameAvatars[name].orEmpty(), name, 24.dp) } }, label = { Text(name) }) }
+                            AssistChip(onClick = { editor = Editor.Game() }, label = { Text("＋ 游戏") })
                             }
                         } } }
-                        // Each mode scopes independently; a previous game selection must not hide an account's other games.
-                        val active = bans.filter { b -> current.contains(b.optString("id")) &&
-                            if (byAccount) overviewAccount.isEmpty() || overviewAccount == b.optString("accountId")
-                            else game == "全部游戏" || game == b.optString("game") }
-                        item { GoldPanel { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            val now = System.currentTimeMillis()
-                            listOf("封禁中角色" to active.count { status(it) == BanTime.ACTIVE }, "今日预计解封" to active.count { it.optInt("permanent") == 0 && it.optLong("confirmed") == 0L && BanTime.today(it.optLong("end"), now, ZoneId.systemDefault()) }, "永久封禁" to active.count { status(it) == BanTime.PERMANENT }).forEach { (label, count) -> Column { Text("$count", fontSize = 28.sp, color = Gold); Text(label, fontSize = 11.sp, color = Muted) } }
-                        } } }
-                        item { OutlinedTextField(value = search, onValueChange = { search = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("搜索账号 / 角色 / 备注") }, shape = MaterialTheme.shapes.large) }
                         val needle = search.trim().lowercase(Locale.ROOT)
                         val records = active.filter { b ->
-                            status(b) != BanTime.CONFIRMED &&
+                            status(b, clockTime) != BanTime.CONFIRMED &&
                                 listOf("identifier", "accountName", "game", "platform", "region", "gameRoleId", "nickname", "note", "reason").joinToString(" ") { b.optString(it) }.lowercase(Locale.ROOT).contains(needle)
                         }.sortedWith(compareBy<JSONObject> { if (status(it) == BanTime.ACTIVE) it.optLong("end") else Long.MAX_VALUE }.thenByDescending { it.optLong("start") })
                         val groups = records.groupBy { it.optString("accountId") to it.optString("regionId") }.values.toList()
@@ -286,13 +313,17 @@ class MainActivity : ComponentActivity() {
                             val lead = rows.firstOrNull { status(it) == BanTime.ACTIVE } ?: rows.first()
                             GoldPanel(Modifier.animateContentSize().clickable { if (rows.size == 1) detail = lead.optString("id") else expanded = !expanded }) {
                                 Text((if (byAccount) lead.optString("accountName").ifBlank { lead.optString("identifier") } else lead.optString("game")) + " · " + status(lead), color = Muted, fontSize = 12.sp)
-                                Text(if (byAccount) lead.optString("game") else lead.optString("accountName").ifBlank { lead.optString("identifier") }, fontSize = 27.sp, fontWeight = FontWeight.SemiBold, color = Gold)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    val title = if (byAccount) lead.optString("game") else lead.optString("accountName").ifBlank { lead.optString("identifier") }
+                                    Avatar(if (byAccount) gameAvatars[lead.optString("game")].orEmpty() else accountAvatars[lead.optString("accountId")].orEmpty(), title)
+                                    Text(title, fontSize = 27.sp, fontWeight = FontWeight.SemiBold, color = Gold, modifier = Modifier.weight(1f))
+                                }
                                 Text(lead.accountLabel(true), color = Muted)
                                 rows.distinctBy { it.optString("roleId") }.take(2).forEach { Text("${it.location()} · ${it.roleLabel()}") }
                                 val roleCount = rows.distinctBy { it.optString("roleId") }.size
                                 if (roleCount > 2) Text("另有 ${roleCount - 2} 个角色", color = Muted, fontSize = 12.sp)
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                                Text(remaining(lead), fontSize = 23.sp, color = Gold)
+                                Text(remaining(lead, clockTime), fontSize = 23.sp, color = Gold)
                                 Text(if (lead.optInt("permanent") == 1) "无预计解封时间" else "${formatted(lead.optLong("end"))} 预计解封", color = Muted, fontSize = 12.sp)
                                 AnimatedVisibility(expanded) {
                                     Column {
@@ -312,7 +343,10 @@ class MainActivity : ComponentActivity() {
                         items(accounts, key = { it.optString("id") }) { a ->
                             val id = a.optString("id")
                             GoldPanel(Modifier.animateContentSize()) {
-                                Column(Modifier.fillMaxWidth().clickable { account = if (account == id) null else id }) { Text(a.title(), fontSize = 25.sp, color = Gold); Text("${a.accountLabel()}  ${if (account == id) "▾" else "▸"}", color = Muted) }
+                                Row(Modifier.fillMaxWidth().clickable { account = if (account == id) null else id }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Avatar(accountAvatars[id].orEmpty(), a.title())
+                                    Column(Modifier.weight(1f)) { Text(a.title(), fontSize = 25.sp, color = Gold); Text("${a.accountLabel()}  ${if (account == id) "▾" else "▸"}", color = Muted) }
+                                }
                                 AnimatedVisibility(account == id) { Column {
                                     Action("编辑账号") { editor = Editor.Account(a) }; Action("＋ 添加游戏角色") { editor = Editor.Role(id) }
                                     store.query("SELECT r.*,z.name AS region,z.platform,g.name AS game FROM roles r JOIN regions z ON z.id=r.regionId JOIN games g ON g.id=z.gameId WHERE r.accountId=? ORDER BY g.name,z.platform,z.name,r.nickname,r.roleId", id).forEach { r ->
@@ -321,12 +355,6 @@ class MainActivity : ComponentActivity() {
                                 } }
                             }
                         }
-                    }
-                    tab == 2 -> {
-                        item { Heading("导入") }
-                        item { GoldPanel { Text("网页导入", fontSize = 22.sp, color = Gold); Text("识别待完善", color = Muted); Action("打开浏览器") { startActivity(Intent(this@MainActivity, BrowserActivity::class.java)) } } }
-                        item { GoldPanel { Text("图片导入", fontSize = 22.sp, color = Gold); Text("识别待完善", color = Muted); Action("选择图片") { image.launch(arrayOf("image/*")) }; preview?.let { Screenshot(it) } } }
-                        item { GoldPanel { Text("备份恢复", fontSize = 22.sp, color = Gold); Action("选择备份") { restoreOpen = true } } }
                     }
                     else -> {
                         item { Heading("设置") }
@@ -351,9 +379,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if (importOpen) EditorDialog("导入", { importOpen = false }) {
+            GoldPanel { Text("网页导入", fontSize = 22.sp, color = Gold); Text("识别待完善", color = Muted); Action("打开浏览器") { startActivity(Intent(this@MainActivity, BrowserActivity::class.java)) } }
+            GoldPanel { Text("图片导入", fontSize = 22.sp, color = Gold); Text("识别待完善", color = Muted); Action("选择图片") { image.launch(arrayOf("image/*")) }; preview?.let { Screenshot(it) } }
+            GoldPanel { Text("备份恢复", fontSize = 22.sp, color = Gold); Action("选择备份") { importOpen = false; restoreOpen = true } }
+        }
         if (managingGames) EditorDialog("游戏管理", { managingGames = false }) {
             var expandedGame by rememberSaveable { mutableStateOf<String?>(null) }
-            FilledTonalButton(onClick = { editor = Editor.Name("新增游戏", "") { store.ensureGame(it) } }, modifier = Modifier.fillMaxWidth()) { Text("＋ 添加游戏") }
+            FilledTonalButton(onClick = { editor = Editor.Game() }, modifier = Modifier.fillMaxWidth()) { Text("＋ 添加游戏") }
             Text("展开游戏管理平台与大区；全平台互通的游戏无需填写大区。", color = Muted, style = MaterialTheme.typography.bodySmall)
             games.forEach { g ->
                 val gid = g.optString("id")
@@ -361,6 +394,8 @@ class MainActivity : ComponentActivity() {
                     var menuOpen by remember { mutableStateOf(false) }
                     val regions = store.query("SELECT *,name AS region FROM regions WHERE gameId=? ORDER BY platform,name", gid)
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(gameAvatars[g.optString("name")].orEmpty(), g.optString("name"), 36.dp)
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f).clickable { expandedGame = if (expandedGame == gid) null else gid }.padding(vertical = 8.dp)) {
                             Text(g.optString("name") + if (expandedGame == gid) " ▾" else " ▸", color = Gold, fontSize = 20.sp)
                             Text("${regions.size} 项平台 / 大区", color = Muted, fontSize = 12.sp)
@@ -368,7 +403,7 @@ class MainActivity : ComponentActivity() {
                         Box {
                             TextButton(onClick = { menuOpen = true }) { Text("更多") }
                             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                DropdownMenuItem(text = { Text("重命名游戏") }, onClick = { menuOpen = false; editor = Editor.Name("重命名游戏", g.optString("name")) { store.writableDatabase.execSQL("UPDATE games SET name=? WHERE id=?", arrayOf(it, gid)) } })
+                                DropdownMenuItem(text = { Text("编辑游戏与头像") }, onClick = { menuOpen = false; editor = Editor.Game(g) })
                                 DropdownMenuItem(text = { Text("删除游戏", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; confirmation = Confirmation("删除游戏？", "该游戏的角色及全部封禁历史将被删除，无法撤销。") { Reminders.cancelAll(this@MainActivity, store); store.writableDatabase.delete("games", "id=?", arrayOf(gid)); refresh() } })
                             }
                         }
@@ -413,31 +448,102 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) { file.delete(); throw e }
     }
 
+    private fun saveAvatar(accountId: String?, gameId: String?, draft: AvatarDraft) {
+        val ownerKey = if (accountId != null) "accountId" else "gameId"
+        val owner = accountId ?: requireNotNull(gameId)
+        if (draft.removed) store.writableDatabase.delete("avatars", "$ownerKey=?", arrayOf(owner))
+        val source = draft.file ?: return
+        val dest = File(Backup.directory(this), Store.uuid() + ".img")
+        try {
+            source.copyTo(dest)
+            val existing = store.one("SELECT id FROM avatars WHERE $ownerKey=?", owner)
+            store.writableDatabase.execSQL("INSERT OR REPLACE INTO avatars(id,accountId,gameId,file) VALUES(?,?,?,?)",
+                arrayOf(existing?.optString("id") ?: Store.uuid(), accountId, gameId, dest.name))
+        } catch (e: Exception) { dest.delete(); throw e }
+    }
+
+    @Composable
+    private fun AvatarPicker(current: String, draft: AvatarDraft, label: String) {
+        val scope = rememberCoroutineScope()
+        val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                draft.loading = true; draft.error = ""
+                scope.launch {
+                    var copied: File? = null
+                    try {
+                        withContext(Dispatchers.IO) { copied = copyImage(uri) }
+                        draft.file?.delete(); draft.file = copied; copied = null; draft.removed = false
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { draft.error = e.message ?: "头像加载失败" }
+                    finally { copied?.delete(); draft.loading = false }
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Avatar(draft.file?.absolutePath ?: if (draft.removed) "" else current, label, 64.dp)
+            Column {
+                TextButton(onClick = { picker.launch(arrayOf("image/*")) }, enabled = !draft.loading) {
+                    Text(if (draft.loading) "正在加载…" else if (draft.file != null || current.isNotEmpty() && !draft.removed) "更换头像" else "选择头像")
+                }
+                if (draft.file != null || current.isNotEmpty() && !draft.removed) TextButton(onClick = {
+                    draft.file?.delete(); draft.file = null; draft.removed = true; draft.error = ""
+                }, enabled = !draft.loading) { Text("移除头像", color = Muted) }
+            }
+        }
+        Error(draft.error)
+    }
+
     @Composable
     private fun Edit(e: Editor, store: Store, dismiss: () -> Unit, saved: (String?) -> Unit,
                      confirm: (Confirmation) -> Unit, notify: () -> Unit) {
         var error by remember { mutableStateOf("") }
+        val avatar = remember { AvatarDraft() }
+        DisposableEffect(Unit) { onDispose { avatar.file?.delete() } }
         fun save(action: () -> String?) { try { saved(action()) } catch (x: Exception) { error = x.message ?: "保存失败" } }
         when (e) {
-            is Editor.Name -> {
-                var name by remember { mutableStateOf(e.initial) }
-                EditorDialog(e.title, dismiss) { Field("名称（必填）", name) { name = it }; Error(error); Action("保存") { save { required(name, "名称"); e.save(name.trim()); null } } }
+            is Editor.Game -> {
+                var name by remember { mutableStateOf(e.old?.optString("name") ?: "") }
+                val currentAvatar = remember { e.old?.let { store.one("SELECT file FROM avatars WHERE gameId=?", it.optString("id"))?.optString("file") }.orEmpty() }
+                EditorDialog(if (e.old == null) "添加游戏" else "编辑游戏", dismiss) {
+                    AvatarPicker(currentAvatar, avatar, name)
+                    Field("游戏名称（必填）", name) { name = it }
+                    Error(error)
+                    FilledTonalButton(onClick = { save {
+                        required(name, "游戏名称")
+                        val exists = store.one("SELECT id FROM games WHERE name=?", name.trim())
+                        require(exists == null || exists.optString("id") == e.old?.optString("id")) { "该游戏已存在" }
+                        val db = store.writableDatabase; db.beginTransaction()
+                        try {
+                            val id = e.old?.optString("id") ?: store.ensureGame(name)
+                            if (e.old != null) db.execSQL("UPDATE games SET name=? WHERE id=?", arrayOf(name.trim(), id))
+                            saveAvatar(null, id, avatar); db.setTransactionSuccessful()
+                        } finally { db.endTransaction() }
+                        null
+                    } }, enabled = !avatar.loading, modifier = Modifier.fillMaxWidth()) { Text("保存") }
+                }
             }
             is Editor.Account -> {
                 var type by remember { mutableStateOf(e.old?.optString("type") ?: "QQ") }
                 var identifier by remember { mutableStateOf(e.old?.optString("identifier") ?: "") }
                 var name by remember { mutableStateOf(e.old?.optString("name") ?: "") }
+                val currentAvatar = remember { e.old?.let { store.one("SELECT file FROM avatars WHERE accountId=?", it.optString("id"))?.optString("file") }.orEmpty() }
                 EditorDialog(if (e.old == null) "添加账号" else "编辑账号", dismiss) {
+                    AvatarPicker(currentAvatar, avatar, name.ifBlank { identifier })
                     Choice("登录类型", listOf("QQ", "微信"), type) { type = it; error = "" }
                     Field(if (type == "QQ") "QQ 号" else "微信号", identifier) { identifier = it; error = "" }
                     Field(if (type == "QQ") "QQ 昵称" else "微信昵称", name) { name = it; error = "" }
                     Text("号码和昵称至少填写一项，也可以都填。", color = Muted, fontSize = 12.sp)
-                    Error(error); Action("保存") { save {
+                    Error(error); Action("保存", !avatar.loading) { save {
                         require(identifier.isNotBlank() || name.isNotBlank()) { if (type == "QQ") "请至少填写 QQ 号或 QQ 昵称" else "请至少填写微信号或微信昵称" }
                         requiredLength(identifier); requiredLength(name)
                         val exists = store.findAccount(type, identifier, name)
                         require(exists == null || exists.optString("id") == e.old?.optString("id")) { "该账号已存在" }
-                        if (e.old == null) store.ensureAccount(type, identifier, name) else store.writableDatabase.execSQL("UPDATE accounts SET type=?,identifier=?,name=? WHERE id=?", arrayOf(type, identifier.trim(), name.trim(), e.old.optString("id")))
+                        val db = store.writableDatabase; db.beginTransaction()
+                        try {
+                            val id = e.old?.optString("id") ?: store.ensureAccount(type, identifier, name)
+                            if (e.old != null) db.execSQL("UPDATE accounts SET type=?,identifier=?,name=? WHERE id=?", arrayOf(type, identifier.trim(), name.trim(), id))
+                            saveAvatar(id, null, avatar); db.setTransactionSuccessful()
+                        } finally { db.endTransaction() }
                         null
                     } }
                     if (e.old != null) Action("删除账号及全部角色和封禁记录") { confirm(Confirmation("删除账号？", "该账号的角色和封禁历史将全部删除，无法撤销。") { Reminders.cancelAll(this@MainActivity, store); store.writableDatabase.delete("accounts", "id=?", arrayOf(e.old.optString("id"))); saved(null) }) }
@@ -505,11 +611,12 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun BanEditor(e: Editor.Ban, store: Store, dismiss: () -> Unit, saved: (String?) -> Unit, notify: () -> Unit) {
-        var start by remember { mutableLongStateOf(e.old?.optLong("start") ?: (System.currentTimeMillis() / 60000 * 60000)) }
+        var start by remember { mutableLongStateOf(e.old?.optLong("start") ?: (System.currentTimeMillis() / 1000 * 1000)) }
         var end by remember { mutableLongStateOf(e.old?.optLong("end")?.takeIf { it > start } ?: (start + 86400000)) }
         var days by remember { mutableStateOf(((end - start) / 86400000).toString()) }
         var hours by remember { mutableStateOf(((end - start) / 3600000 % 24).toString()) }
         var minutes by remember { mutableStateOf(((end - start) / 60000 % 60).toString()) }
+        var seconds by remember { mutableStateOf(((end - start) / 1000 % 60).toString()) }
         var permanent by remember { mutableStateOf(e.old?.optInt("permanent") == 1) }
         var mode by remember { mutableStateOf("填写封禁时长") }
         var reminder by remember { mutableStateOf(ReminderLabels[(e.old?.optInt("remind") ?: store.defaultReminder()).coerceIn(0, 3)]) }
@@ -530,7 +637,7 @@ class MainActivity : ComponentActivity() {
                 } catch (x: Exception) { staged.forEach { it.delete() }; error = x.message ?: "添加失败" } finally { copying = false }
             } }
         }
-        val calculated = if (permanent) 0L else if (mode == "填写预计解封时间") end else runCatching { BanTime.end(start, days.ifBlank { "0" }.toLong(), hours.ifBlank { "0" }.toLong(), minutes.ifBlank { "0" }.toLong()) }.getOrNull()
+        val calculated = if (permanent) 0L else if (mode == "填写预计解封时间") end else runCatching { BanTime.end(start, days.ifBlank { "0" }.toLong(), hours.ifBlank { "0" }.toLong(), minutes.ifBlank { "0" }.toLong(), seconds.ifBlank { "0" }.toLong()) }.getOrNull()
         EditorDialog(if (e.old == null) "新增封禁记录" else "编辑封禁记录", { if (!copying) dismiss() }) {
             val r = remember { store.one("SELECT r.roleId,r.nickname,g.name AS game,z.name AS region,z.platform FROM roles r JOIN regions z ON z.id=r.regionId JOIN games g ON g.id=z.gameId WHERE r.id=?", e.role) }
             r?.let { Text("${it.optString("game")} · ${it.location()} · ${it.roleLabel("roleId")}", color = Muted) }
@@ -538,12 +645,15 @@ class MainActivity : ComponentActivity() {
             Toggle("永久封禁", permanent) { permanent = it }
             AnimatedVisibility(!permanent) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Choice("填写方式", listOf("填写封禁时长", "填写预计解封时间"), mode) { next ->
-                    if (next == "填写预计解封时间") end = calculated?.takeIf { it > start } ?: (start + 60000)
-                    else { val m = ((end - start) / 60000).coerceAtLeast(1); days = (m / 1440).toString(); hours = (m % 1440 / 60).toString(); minutes = (m % 60).toString() }; mode = next
+                    if (next == "填写预计解封时间") end = calculated?.takeIf { it > start } ?: (start + 1000)
+                    else { val s = ((end - start) / 1000).coerceAtLeast(1); days = (s / 86400).toString(); hours = (s % 86400 / 3600).toString(); minutes = (s % 3600 / 60).toString(); seconds = (s % 60).toString() }; mode = next
                 }
-                if (mode == "填写封禁时长") Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Numeric("天", days, Modifier.weight(1f)) { days = it }; Numeric("小时", hours, Modifier.weight(1f)) { hours = it }; Numeric("分钟", minutes, Modifier.weight(1f)) { minutes = it } }
+                if (mode == "填写封禁时长") Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Numeric("天", days, Modifier.weight(1f)) { days = it }; Numeric("小时", hours, Modifier.weight(1f)) { hours = it } }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Numeric("分钟", minutes, Modifier.weight(1f)) { minutes = it }; Numeric("秒", seconds, Modifier.weight(1f)) { seconds = it } }
+                }
                 else DateAction("预计解封时间", end) { end = it }
-                Text(calculated?.let { "预计解封 ${formatted(it)}\n封禁时长 ${(it - start) / 86400000}天 ${(it - start) / 3600000 % 24}小时 ${(it - start) / 60000 % 60}分钟" } ?: "请填写有效封禁时长", color = Gold)
+                Text(calculated?.let { "预计解封 ${formatted(it)}\n封禁时长 ${durationText(it - start)}" } ?: "请填写有效封禁时长", color = Gold)
                 Choice("到期提醒", ReminderLabels, reminder) { reminder = it }
             } }
             Field("封禁原因（选填）", reason) { reason = it }; Field("备注（选填）", note, false) { note = it }
@@ -581,30 +691,80 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun DateAction(label: String, value: Long, change: (Long) -> Unit) {
+        var date by remember { mutableStateOf<LocalDate?>(null) }
+        var hour by remember { mutableStateOf("") }
+        var minute by remember { mutableStateOf("") }
+        var second by remember { mutableStateOf("") }
+        var error by remember { mutableStateOf("") }
         Action("$label\n${formatted(value)}") {
             val z = Instant.ofEpochMilli(value).atZone(ZoneId.systemDefault())
-            DatePickerDialog(this, { _, year, month, day -> TimePickerDialog(this, { _, hour, minute ->
-                change(LocalDateTime.of(year, month + 1, day, hour, minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
-            }, z.hour, z.minute, true).show() }, z.year, z.monthValue - 1, z.dayOfMonth).show()
+            DatePickerDialog(this, { _, year, month, day ->
+                hour = z.hour.toString().padStart(2, '0'); minute = z.minute.toString().padStart(2, '0'); second = z.second.toString().padStart(2, '0')
+                error = ""; date = LocalDate.of(year, month + 1, day)
+            }, z.year, z.monthValue - 1, z.dayOfMonth).show()
         }
+        date?.let { selectedDate -> AlertDialog(onDismissRequest = { date = null }, title = { Text("$label · 时分秒") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(selectedDate.toString())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Numeric("时", hour, Modifier.weight(1f)) { hour = it; error = "" }
+                    Numeric("分", minute, Modifier.weight(1f)) { minute = it; error = "" }
+                    Numeric("秒", second, Modifier.weight(1f)) { second = it; error = "" }
+                }
+                Text("24 小时制：时 0–23，分、秒 0–59", color = Muted, fontSize = 12.sp)
+                Error(error)
+            } }, confirmButton = { TextButton(onClick = {
+                val h = hour.toIntOrNull(); val m = minute.toIntOrNull(); val s = second.toIntOrNull()
+                if (h == null || h !in 0..23 || m == null || m !in 0..59 || s == null || s !in 0..59) error = "请填写有效的时、分、秒"
+                else { change(selectedDate.atTime(h, m, s).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()); date = null }
+            }) { Text("确定") } }, dismissButton = { TextButton(onClick = { date = null }) { Text("取消") } }) }
     }
 }
 
 private sealed interface Editor {
-    data class Name(val title: String, val initial: String, val save: (String) -> Unit) : Editor
     data class Account(val old: JSONObject? = null) : Editor
+    data class Game(val old: JSONObject? = null) : Editor
     data class Role(val account: String, val old: JSONObject? = null) : Editor
     data class Region(val game: String, val old: JSONObject? = null) : Editor
     data class Ban(val role: String, val old: JSONObject? = null) : Editor
 }
+private class AvatarDraft {
+    var file by mutableStateOf<File?>(null)
+    var removed by mutableStateOf(false)
+    var loading by mutableStateOf(false)
+    var error by mutableStateOf("")
+}
 private data class Confirmation(val title: String, val message: String, val action: () -> Unit)
 private fun requiredLength(value: String) { require(value.length <= 10000) { "输入内容过长" } }
 private fun required(value: String, label: String) { require(value.isNotBlank()) { "请填写$label" }; requiredLength(value) }
-private fun remaining(b: JSONObject): String = when (status(b)) {
-    BanTime.ACTIVE -> BanTime.remaining(b.optLong("end"), System.currentTimeMillis())
+private fun durationText(millis: Long) = (millis / 1000).let { "${it / 86400}天 ${it % 86400 / 3600}小时 ${it % 3600 / 60}分钟 ${it % 60}秒" }
+private fun remaining(b: JSONObject, now: Long = System.currentTimeMillis()): String = when (status(b, now)) {
+    BanTime.ACTIVE -> BanTime.remaining(b.optLong("end"), now)
     BanTime.PERMANENT -> "永久封禁"; BanTime.CONFIRMED -> "已解封"; else -> "已到预计解封时间"
 }
 
+@Composable
+private fun Avatar(fileName: String, label: String, size: Dp = 44.dp) {
+    val context = LocalContext.current
+    val bitmap by produceState<android.graphics.Bitmap?>(null, fileName) {
+        value = if (fileName.isEmpty()) null else withContext(Dispatchers.IO) {
+            runCatching {
+                val file = if (File(fileName).isAbsolute) File(fileName) else File(Backup.directory(context), fileName)
+                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(file.absolutePath, options)
+                var sample = 1
+                while (options.outWidth / sample > 256 || options.outHeight / sample > 256) sample *= 2
+                options.inJustDecodeBounds = false; options.inSampleSize = sample
+                BitmapFactory.decodeFile(file.absolutePath, options)
+            }.getOrNull()
+        }
+    }
+    Box(Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+        val loaded = bitmap
+        if (loaded != null) Image(loaded.asImageBitmap(), "$label 头像", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        else Text(label.trim().take(1).ifBlank { "◈" }, color = Gold, fontSize = (size.value * 0.42f).sp)
+    }
+}
 @Composable
 private fun Heading(title: String, subtitle: String = "") { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(title, style = MaterialTheme.typography.headlineLarge); if (subtitle.isNotBlank()) Text(subtitle, color = Muted) } }
 @Composable
@@ -645,8 +805,8 @@ private fun EditorDialog(title: String, dismiss: () -> Unit, content: @Composabl
     }
 }
 @Composable
-private fun BanCard(b: JSONObject, current: Boolean, click: () -> Unit) {
-    GoldPanel(Modifier.clickable(onClick = click)) { Text((if (current) "" else "历史 · ") + status(b), color = Gold); Text("${b.optString("game")} · ${b.location()}", fontSize = 21.sp); Text("${b.accountLabel(true)} / ${b.roleLabel()}", color = Muted); Text(remaining(b), color = Gold, fontSize = 25.sp) }
+private fun BanCard(b: JSONObject, current: Boolean, now: Long, click: () -> Unit) {
+    GoldPanel(Modifier.clickable(onClick = click)) { Text((if (current) "" else "历史 · ") + status(b, now), color = Gold); Text("${b.optString("game")} · ${b.location()}", fontSize = 21.sp); Text("${b.accountLabel(true)} / ${b.roleLabel()}", color = Muted); Text(remaining(b, now), color = Gold, fontSize = 25.sp) }
 }
 @Composable
 private fun Screenshot(file: File) {

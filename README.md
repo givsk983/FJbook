@@ -1,14 +1,13 @@
 # 封禁手册
 
-个人离线游戏封禁管理 Android App，当前版本 **0.2.0**。无需登录或 Root，Android 8.0 及以上。
+个人离线游戏封禁管理 Android App，当前版本 **0.2.1**。无需登录或 Root，Android 8.0 及以上。
 
-## 0.2.0 更新
+## 0.2.1 更新
 
-- 重做黑金界面与应用图标，总览可按游戏或账号查看。
-- 平台与大区分开管理，支持全平台互通和不分区游戏。
-- QQ / 微信号与昵称至少填一项；游戏昵称必填，角色 ID 选填。
-- 优化游戏管理，设置新增 GitHub 仓库与 Telegram 反馈入口。
-- 保留旧账号与封禁记录，兼容旧版备份恢复。
+- 封禁时间、时长输入与倒计时精确到秒。
+- 账号与游戏支持自定义头像，并随完整备份恢复。
+- 主页搜索固定置顶，优化统计与分类布局。
+- 导入入口移至账号页底部，底部导航精简为三项。
 
 [下载最新版](https://github.com/yunhe4550-design/Termination-Handbook/releases/latest) · [反馈](https://t.me/mbazhuan)
 
@@ -16,15 +15,16 @@
 
 - 账号 → 游戏 → 平台 / 可选大区 → 角色 → 多次封禁记录，支持新增、编辑、删除。
 - QQ 账号填写 QQ 号 / QQ 昵称，微信账号填写微信号 / 微信昵称；两项至少填写一项。游戏昵称必填，角色 ID 选填。
+- 账号与游戏支持从相册选择、更换和移除头像，显示于账号列表、游戏管理、总览卡片与分类入口；未设置时以名称首字占位，头像随完整备份导出和恢复。
 - 平台支持全平台、安卓、苹果、鸿蒙、PC 及自定义平台；无大区的游戏可留空，互通账号选全平台。游戏管理按游戏折叠展示，编辑和删除操作集中在对应游戏或区服内。
-- 封禁时长支持天、小时、分钟组合，或选择预计解封时间，双向计算；永久封禁独立设置。
+- 封禁时长支持天、小时、分钟、秒组合，或选择精确到秒的预计解封时间，双向计算；开始时间、详情及倒计时均精确到秒，倒计时每秒刷新；永久封禁独立设置。
 - 封禁原因、备注、截图附件；每条最多 20 张图片，单张上限 32 MB。
 - 总览支持按游戏 / 按账号分类、文本搜索；区服独立展示，默认按预计解封时间排序。历史记录在角色页面查看。
 - 按角色最新封禁统计封禁中、今日预计解封、永久封禁数量。
 - 预计解封、提前 24 小时、两者都提醒及不提醒；默认规则可设置。
 - 点击系统通知进入封禁详情；确认实际解封会取消该次后续提醒。
 - 完整 ZIP 备份，支持合并、替换、重复检查、附件恢复和恢复前校验。
-- Compose 黑金渐变卡片、细边框、展开动效，四个底部导航。
+- Compose 黑金渐变卡片、细边框、展开动效；底部保留总览、账号、设置三项导航，导入入口位于账号页底部居中。
 - HTTPS 内置浏览器、图片选择预览入口，明确提示识别功能待完善。
 
 ## 状态与统计规则
@@ -39,7 +39,7 @@
 
 ## 备份语义
 
-- ZIP 包包含版本化 `manifest.json` 及 `attachments/`，清单含全部账号、游戏、平台与大区、角色、封禁、附件索引和设置。新导出格式为版本 3，仍可恢复版本 1 / 2 备份。
+- ZIP 包包含版本化 `manifest.json` 及 `attachments/`，清单含全部账号、游戏、平台与大区、角色、封禁、头像、附件索引和设置。新导出格式为版本 4，仍可恢复版本 1–3 备份。合并保留已有头像，为缺少头像的账号和游戏补充图片。
 - 合并优先保留本地；有号码的账号按类型和号码匹配，只填昵称的账号按类型和昵称匹配。游戏按名称、区服按游戏和平台与名称匹配。角色有 ID 时按账号、区服、ID 匹配；无 ID 时按账号、区服、昵称匹配。
 - 封禁按角色、起止时间、永久标记、原因和备注检查重复。重复记录保留本地确认状态与提醒规则。相同附件 ID 不重复导入。
 - 替换保留备份中的稳定 ID 与设置；先校验版本、字段、关联和所有附件，再通过数据库事务整体替换。失败保留原始数据库与附件。
@@ -48,7 +48,7 @@
 
 ## 构建
 
-界面使用 Kotlin 2.1.20 + Jetpack Compose / Material 3，JVM 目标为 17。数据库、备份及系统提醒使用 Java 模块。数据库版本 3 自动迁移版本 1 / 2，保留旧账号、区服名称、角色、封禁和附件关系，旧记录不自动推断平台。可在 Android Studio 中打开并使用标准 Gradle 构建：
+界面使用 Kotlin 2.1.20 + Jetpack Compose / Material 3，JVM 目标为 17。数据库、备份及系统提醒使用 Java 模块。数据库版本 4 自动迁移版本 1–3，保留旧账号、区服名称、角色、封禁和附件关系，旧记录不自动推断平台。可在 Android Studio 中打开并使用标准 Gradle 构建：
 
 ```powershell
 .\gradlew.bat :app:assembleDebug
@@ -60,7 +60,7 @@
 .\scripts\build.ps1 -SdkRoot C:\Users\1657322\AppData\Local\Android\Sdk
 ```
 
-需要 JDK 17 或以上、Android SDK Platform 36。输出 `dist/chendian-0.2.0.apk`。旧的纯 Java 手工编译流程已由 Gradle 替代。若存在 `build/manual/debug.keystore`，Gradle 会继续使用原调试签名以支持覆盖安装；否则使用标准 Android 调试签名。
+需要 JDK 17 或以上、Android SDK Platform 36。输出 `dist/chendian-0.2.1.apk`。旧的纯 Java 手工编译流程已由 Gradle 替代。若存在 `build/manual/debug.keystore`，Gradle 会继续使用原调试签名以支持覆盖安装；否则使用标准 Android 调试签名。
 
 本次产物是可安装的调试版，不是正式发行签名版。
 
@@ -70,7 +70,7 @@
 .\scripts\test.ps1
 python scripts\test_schema.py
 .\scripts\build-tests.ps1
-adb install -r dist/chendian-0.2.0.apk
+adb install -r dist/chendian-0.2.1.apk
 adb install -r dist/chendian-tests.apk
 adb shell am instrument -w cn.chendian.app.test/cn.chendian.app.AppTests
 ```
@@ -93,7 +93,7 @@ HTML 解析与 OCR 尚未实现，入口不会返回虚假的成功结果。后�
 
 - `Store.java`：SQLite 关系模型与查询。
 - `BanTime.java`：时间、状态、倒计时规则。
-- `MainActivity.kt`：Compose 四个主页面、声明式状态、录入弹窗、历史和详情流程。
+- `MainActivity.kt`：Compose 三个主页面、账号页导入入口、声明式状态、录入弹窗、历史和详情流程。
 - `ui/Theme.kt`：黑金配色、统一卡片与可预览的 Compose 组件。
 - `Reminders.java`、`ReminderReceiver.java`、`BootReceiver.java`：提醒调度、通知和系统事件恢复。
 - `Backup.java`：版本化备份、合并与替换。
@@ -111,9 +111,9 @@ HTML 解析与 OCR 尚未实现，入口不会返回虚假的成功结果。后�
 
 ## Kotlin + Jetpack Compose 迁移
 
-- 四个主页面、账号/角色/封禁编辑、详情、历史、筛选及游戏管理均由 Compose 渲染。
+- 三个主页面、导入弹窗、账号/角色/封禁编辑、详情、历史及游戏管理均由 Compose 渲染。
 - 浏览器使用 Compose 工具栏与原生 WebView；日期时间仍调用系统选择器。
 - 列表使用 LazyColumn，展开状态由 Compose 管理；主题和渐变卡片集中于 `ui/Theme.kt`，支持 Android Studio Preview。
 - 使用 Activity Result API 选择图片、导出和恢复备份；文件读写在 IO 调度器运行。
-- 继续使用 Java 数据库、备份和提醒模块，应用 ID 不变；数据库和备份格式现为版本 3，兼容旧数据迁移及版本 1 / 2 备份恢复。
+- 继续使用 Java 数据库、备份和提醒模块，应用 ID 不变；数据库和备份格式现为版本 4，兼容旧数据迁移及版本 1–3 备份恢复。
 - 主 APK、设备测试 APK 和 Android Lint 可通过 Gradle 构建检查；真机上的视觉、键盘、权限与通知交互仍需验收。

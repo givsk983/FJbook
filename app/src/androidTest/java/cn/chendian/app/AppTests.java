@@ -49,7 +49,7 @@ public class AppTests extends Instrumentation {
             check(!androidRole.equals(iosRole),"same ID on different platforms stays separate");
             insert(s,"cross-ban",blank1,now-3600000,now+3600000,0,now);insert(s,"android-ban",androidRole,now-3600000,now+3600000,0,now);insert(s,"ios-ban",iosRole,now-3600000,now+3600000,0,now);
             ByteArrayOutputStream platformOut=new ByteArrayOutputStream();Backup.write(isolated,s,platformOut);byte[] platformBackup=platformOut.toByteArray();
-            check(s.snapshot().getInt("version")==3,"new backup version");
+            check(s.snapshot().getInt("version")==4,"new backup version");
             check(Backup.restore(isolated,s,new ByteArrayInputStream(platformBackup),false)==0,"v2 merge matches blank ID by nickname");
             check(s.query("SELECT * FROM roles WHERE accountId=?",player).size()==4,"v2 merge keeps all distinct roles");
             check(Backup.restore(isolated,s,new ByteArrayInputStream(platformBackup),true)==3,"v2 replace restores platform records");
@@ -66,6 +66,22 @@ public class AppTests extends Instrumentation {
             check(Backup.restore(isolated,s,new ByteArrayInputStream(accountBackup),true)==4,"nickname-only backup replacement");
             check(s.ban("nickname-ban").getString("accountName").equals("昵称一")&&s.ban("nickname-ban").getString("identifier").isEmpty(),"nickname-only account and ban relationship preserved");
             check(s.query("SELECT * FROM accounts WHERE identifier=''").size()==3,"backup keeps different nickname-only accounts");
+            byte[] avatarBytes={9,8,7,6};Files.write(new File(Backup.directory(isolated),"account-avatar.img").toPath(),avatarBytes);Files.write(new File(Backup.directory(isolated),"game-avatar.img").toPath(),avatarBytes);
+            s.getWritableDatabase().execSQL("INSERT INTO avatars VALUES('av-account',?,NULL,'account-avatar.img')",new Object[]{nickQQ});
+            s.getWritableDatabase().execSQL("INSERT INTO avatars VALUES('av-game',NULL,?,'game-avatar.img')",new Object[]{g});
+            Backup.prune(isolated,s);check(new File(Backup.directory(isolated),"account-avatar.img").exists(),"prune retains avatars");
+            ByteArrayOutputStream avatarOut=new ByteArrayOutputStream();Backup.write(isolated,s,avatarOut);byte[] avatarBackup=avatarOut.toByteArray();
+            check(Backup.restore(isolated,s,new ByteArrayInputStream(avatarBackup),false)==0,"avatar backup merge idempotent");
+            check(s.query("SELECT * FROM avatars").size()==2,"avatar merge keeps one per owner");
+            check(Backup.restore(isolated,s,new ByteArrayInputStream(avatarBackup),true)==4,"avatar backup replace preserves bans");
+            for(JSONObject avatar:s.query("SELECT * FROM avatars"))check(Arrays.equals(avatarBytes,Files.readAllBytes(new File(Backup.directory(isolated),avatar.getString("file")).toPath())),"avatar bytes restored");
+            check(s.one("SELECT * FROM avatars WHERE accountId=?",nickQQ)!=null&&s.one("SELECT * FROM avatars WHERE gameId=?",g)!=null,"avatar owner relationship restored");
+            JSONObject missingAvatar=s.snapshot();missingAvatar.getJSONArray("avatars").getJSONObject(0).put("file","missing.img");boolean avatarRejected=false;
+            try{Backup.restore(isolated,s,new ByteArrayInputStream(zip("manifest.json",missingAvatar.toString().getBytes("UTF-8"))),true);}catch(Exception expected){avatarRejected=true;}
+            check(avatarRejected&&s.query("SELECT * FROM avatars").size()==2&&s.bans().size()==4,"missing avatar rejected before replacement");
+            JSONObject legacy3=s.snapshot();legacy3.put("version",3);legacy3.remove("avatars");
+            check(Backup.restore(isolated,s,new ByteArrayInputStream(zip("manifest.json",legacy3.toString().getBytes("UTF-8"))),true)==4,"v3 backup without avatars remains importable");
+            check(s.query("SELECT * FROM avatars").isEmpty(),"old backup restores without phantom avatars");
         }finally{target.deleteDatabase(name);remove(testRoot);}
         migrationTest(target);
     }
@@ -80,7 +96,7 @@ public class AppTests extends Instrumentation {
                 legacy.execSQL("INSERT INTO bans VALUES('b','r',100,9999,0,0,'','',1,100)");legacy.execSQL("INSERT INTO attachments VALUES('shot','b','old.img','image/png')");legacy.setVersion(1);
             }
             try(Store upgraded=new Store(target,name)) {
-                check(upgraded.getReadableDatabase().getVersion()==3,"Android database upgraded");
+                check(upgraded.getReadableDatabase().getVersion()==4,"Android database upgraded");
                 check(upgraded.ban("b").getString("region").equals("安卓一区"),"Android upgrade preserves old region");
                 check(upgraded.query("SELECT * FROM attachments").size()==1,"Android upgrade preserves attachment metadata");
                 check(upgraded.query("PRAGMA foreign_key_check").isEmpty(),"Android upgrade relationships valid");

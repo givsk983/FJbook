@@ -8,12 +8,13 @@ import java.util.*;
 
 /** All relationships use stable UUIDs, including across backup/restore. */
 public class Store extends SQLiteOpenHelper {
-    static final String[] TABLES={"accounts","games","regions","roles","bans","attachments","settings"};
+    static final String[] TABLES={"accounts","games","regions","roles","bans","attachments","avatars","settings"};
+    static final String AVATARS_SQL="CREATE TABLE avatars(id TEXT PRIMARY KEY,accountId TEXT UNIQUE REFERENCES accounts(id) ON DELETE CASCADE,gameId TEXT UNIQUE REFERENCES games(id) ON DELETE CASCADE,file TEXT NOT NULL,CHECK((accountId IS NOT NULL AND gameId IS NULL) OR (accountId IS NULL AND gameId IS NOT NULL)))";
     static final String ACCOUNTS_SQL="CREATE TABLE accounts(id TEXT PRIMARY KEY,type TEXT NOT NULL CHECK(type IN ('QQ','微信')),identifier TEXT NOT NULL DEFAULT '',name TEXT NOT NULL DEFAULT '',CHECK(length(trim(identifier))>0 OR length(trim(name))>0))";
     static final String REGIONS_SQL="CREATE TABLE regions(id TEXT PRIMARY KEY,gameId TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,name TEXT NOT NULL,platform TEXT NOT NULL DEFAULT '',UNIQUE(gameId,platform,name))";
     static final String ROLES_SQL="CREATE TABLE roles(id TEXT PRIMARY KEY,accountId TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,regionId TEXT NOT NULL REFERENCES regions(id) ON DELETE CASCADE,roleId TEXT NOT NULL DEFAULT '',nickname TEXT NOT NULL DEFAULT '')";
-    public Store(Context c) { super(c,"chendian.db",null,3); }
-    Store(Context c,String name) { super(c,name,null,3); }
+    public Store(Context c) { super(c,"chendian.db",null,4); }
+    Store(Context c,String name) { super(c,name,null,4); }
     // SQLite cannot rebuild referenced tables with foreign keys enabled inside an upgrade transaction.
     @Override public void onConfigure(SQLiteDatabase db) { db.setForeignKeyConstraintsEnabled(db.getVersion()==0||db.getVersion()>=3); }
     @Override public void onOpen(SQLiteDatabase db) { db.setForeignKeyConstraintsEnabled(true); }
@@ -27,6 +28,7 @@ public class Store extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE bans(id TEXT PRIMARY KEY,roleId TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,start INTEGER NOT NULL,end INTEGER NOT NULL DEFAULT 0,permanent INTEGER NOT NULL DEFAULT 0,confirmed INTEGER NOT NULL DEFAULT 0,reason TEXT NOT NULL DEFAULT '',note TEXT NOT NULL DEFAULT '',remind INTEGER NOT NULL DEFAULT 1,created INTEGER NOT NULL)");
         db.execSQL("CREATE INDEX ban_role_time ON bans(roleId,start DESC,created DESC,id DESC)");
         db.execSQL("CREATE TABLE attachments(id TEXT PRIMARY KEY,banId TEXT NOT NULL REFERENCES bans(id) ON DELETE CASCADE,file TEXT NOT NULL,mime TEXT NOT NULL)");
+        db.execSQL(AVATARS_SQL);
         db.execSQL("CREATE TABLE settings(id TEXT PRIMARY KEY,value TEXT NOT NULL)");
         db.execSQL("INSERT INTO settings VALUES('defaultRemind','1')");
     }
@@ -35,9 +37,10 @@ public class Store extends SQLiteOpenHelper {
         db.execSQL("CREATE UNIQUE INDEX role_without_id ON roles(accountId,regionId,nickname) WHERE roleId=''");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int old,int next) {
-        if(old<1||old>2||next!=3)throw new IllegalStateException("尚无此版本的数据迁移");
+        if(old<1||old>3||next!=4)throw new IllegalStateException("尚无此版本的数据迁移");
         if(old==1)migrateHierarchy(db);
-        migrateAccounts(db);
+        if(old<3)migrateAccounts(db);
+        db.execSQL(AVATARS_SQL);
         try(Cursor errors=db.rawQuery("PRAGMA foreign_key_check",null)) {
             if(errors.moveToFirst())throw new IllegalStateException("数据迁移关系校验失败");
         }
@@ -123,7 +126,7 @@ public class Store extends SQLiteOpenHelper {
     public void setting(String key,String value) { getWritableDatabase().execSQL("INSERT OR REPLACE INTO settings VALUES(?,?)",new Object[]{key,value}); }
     public JSONArray array(String table) { return new JSONArray(query("SELECT * FROM "+table)); }
     public JSONObject snapshot() throws JSONException {
-        JSONObject root=new JSONObject().put("format","chendian-backup").put("version",3).put("exportedAt",System.currentTimeMillis());
+        JSONObject root=new JSONObject().put("format","chendian-backup").put("version",4).put("exportedAt",System.currentTimeMillis());
         for(String t:TABLES)root.put(t,array(t));return root;
     }
 }
