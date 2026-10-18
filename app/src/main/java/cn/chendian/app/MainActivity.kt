@@ -116,6 +116,8 @@ class MainActivity : ComponentActivity() {
         var editor by remember { mutableStateOf<Editor?>(null) }
         var confirmation by remember { mutableStateOf<Confirmation?>(null) }
         var managingGames by remember { mutableStateOf(false) }
+        var libraryOpen by remember { mutableStateOf(false) }
+        var addingGame by remember { mutableStateOf(false) }
         var restoreOpen by remember { mutableStateOf(false) }
         var importOpen by rememberSaveable { mutableStateOf(false) }
         var replace by remember { mutableStateOf(false) }
@@ -298,7 +300,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             } else {
                             (listOf("全部游戏") + games.map { it.optString("name") }).forEach { name -> FilterChip(selected = game == name, onClick = { game = name; store.setting("overviewGame", name) }, leadingIcon = if (name == "全部游戏") null else { { Avatar(gameAvatars[name].orEmpty(), name, 24.dp) } }, label = { Text(name) }) }
-                            AssistChip(onClick = { editor = Editor.Game() }, label = { Text("＋ 游戏") })
+                            AssistChip(onClick = { addingGame = true }, label = { Text("＋ 游戏") })
                             }
                         } } }
                         val needle = search.trim().lowercase(Locale.ROOT)
@@ -359,7 +361,7 @@ class MainActivity : ComponentActivity() {
                     else -> {
                         item { Heading("设置") }
                         item { GoldPanel { Text("默认提醒", fontSize = 22.sp, color = Gold); Choice("提醒规则", ReminderLabels, ReminderLabels[store.defaultReminder().coerceIn(0, 3)]) { store.setting("defaultRemind", ReminderLabels.indexOf(it).toString()); refresh() }; Action("通知权限与管理") { notifications() } } }
-                        item { GoldPanel { Text("备份与恢复", fontSize = 22.sp, color = Gold); Action("导出备份") { export.launch("封禁手册_${LocalDate.now()}.zip") }; Action("恢复备份") { restoreOpen = true } } }
+                        item { GoldPanel { Text("备份与恢复", fontSize = 22.sp, color = Gold); Text("支持恢复账号备份，也可导入游戏名称与图标库。", color = Muted, style = MaterialTheme.typography.bodySmall); Action("导出备份") { export.launch("封禁手册_${LocalDate.now()}.zip") }; Action("恢复备份 / 导入游戏库") { restoreOpen = true } } }
                         item { GoldPanel {
                             Text("关于与反馈", fontSize = 22.sp, color = Gold)
                             listOf(
@@ -382,11 +384,11 @@ class MainActivity : ComponentActivity() {
         if (importOpen) EditorDialog("导入", { importOpen = false }) {
             GoldPanel { Text("网页导入", fontSize = 22.sp, color = Gold); Text("识别待完善", color = Muted); Action("打开浏览器") { startActivity(Intent(this@MainActivity, BrowserActivity::class.java)) } }
             GoldPanel { Text("图片导入", fontSize = 22.sp, color = Gold); Text("识别待完善", color = Muted); Action("选择图片") { image.launch(arrayOf("image/*")) }; preview?.let { Screenshot(it) } }
-            GoldPanel { Text("备份恢复", fontSize = 22.sp, color = Gold); Action("选择备份") { importOpen = false; restoreOpen = true } }
+            GoldPanel { Text("备份恢复 / 游戏库导入", fontSize = 22.sp, color = Gold); Text("恢复账号备份，或导入游戏名称与图标库。", color = Muted); Action("选择备份 / 游戏库") { importOpen = false; restoreOpen = true } }
         }
         if (managingGames) EditorDialog("游戏管理", { managingGames = false }) {
             var expandedGame by rememberSaveable { mutableStateOf<String?>(null) }
-            FilledTonalButton(onClick = { editor = Editor.Game() }, modifier = Modifier.fillMaxWidth()) { Text("＋ 添加游戏") }
+            FilledTonalButton(onClick = { addingGame = true }, modifier = Modifier.fillMaxWidth()) { Text("＋ 添加游戏") }
             Text("展开游戏管理平台与大区；全平台互通的游戏无需填写大区。", color = Muted, style = MaterialTheme.typography.bodySmall)
             games.forEach { g ->
                 val gid = g.optString("id")
@@ -420,7 +422,15 @@ class MainActivity : ComponentActivity() {
                 } }
             }
         }
-        if (restoreOpen) EditorDialog("选择恢复方式", { restoreOpen = false }) {
+        if (addingGame) EditorDialog("选择添加游戏方式", { addingGame = false }) {
+            Action("从游戏库选择 / 管理游戏库") { addingGame = false; libraryOpen = true }
+            Text("选择已收集的游戏，自动添加名称与图标；也可在库中导入、收集和导出。", color = Muted)
+            Action("手动填写游戏名称与图标") { addingGame = false; editor = Editor.Game() }
+        }
+        if (libraryOpen) LibraryDialog({ libraryOpen = false }, { refresh() })
+        if (restoreOpen) EditorDialog("选择导入 / 恢复方式", { restoreOpen = false }) {
+            Action("导入游戏库：添加游戏名称与图标") { restoreOpen = false; libraryOpen = true }
+            Text("游戏库仅包含名称与图标；账号和封禁记录请使用下方备份恢复。", color = Muted)
             Action("合并：保留本地记录，补充备份数据") { replace = false; restoreOpen = false; restore.launch(arrayOf("*/*")) }
             Action("替换：清空本地档案后恢复备份") { restoreOpen = false; confirmation = Confirmation("替换全部本地数据？", "当前账号、角色、封禁记录、附件和设置将被替换。建议先导出备份。文件校验通过后执行。") { replace = true; restore.launch(arrayOf("*/*")) } }
         }
@@ -491,6 +501,96 @@ class MainActivity : ComponentActivity() {
             }
         }
         Error(draft.error)
+    }
+
+    @Composable
+    private fun LibraryDialog(dismiss: () -> Unit, changed: () -> Unit) {
+        val library = remember { GameLibrary(this) }
+        var rows by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+        var query by remember { mutableStateOf("") }
+        var error by remember { mutableStateOf("") }
+        var working by remember { mutableStateOf(false) }
+        var adding by remember { mutableStateOf(false) }
+        val scope = rememberCoroutineScope()
+        fun work(action: suspend () -> String) {
+            if (working) return
+            working = true; error = ""
+            scope.launch {
+                try {
+                    val message = withContext(Dispatchers.IO) { action() }
+                    rows = withContext(Dispatchers.IO) { library.read() }
+                    changed()
+                    if (message.isNotEmpty()) toast(message)
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { error = e.message ?: "游戏库操作失败" }
+                finally { working = false }
+            }
+        }
+        LaunchedEffect(Unit) { work { "" } }
+        val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) work {
+                val count = contentResolver.openInputStream(uri).use { library.merge(requireNotNull(it)) }
+                "导入完成，新增或补充 $count 个游戏"
+            }
+        }
+        val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri != null) work {
+                contentResolver.openOutputStream(uri, "wt").use { library.export(requireNotNull(it)) }
+                "游戏库已导出，可将此文件分享给别人"
+            }
+        }
+        EditorDialog("游戏名称与图标库", { if (!working) dismiss() }) {
+            Text("独立保存名称与图标，导出文件可供其他人导入。重复名称合并，已有图标保留；不包含账号与封禁记录。", color = Muted)
+            Row {
+                TextButton(enabled = !working, onClick = { importer.launch(arrayOf("*/*")) }) { Text("导入库") }
+                TextButton(enabled = !working && rows.isNotEmpty(), onClick = { exporter.launch("沉淀一下-游戏库.json") }) { Text("导出分享") }
+                TextButton(enabled = !working, onClick = { adding = true }) { Text("新增") }
+            }
+            Action("将游戏管理中的名称和图标收集到库", !working) { work { "已收集或补充 ${library.collect(store)} 个游戏" } }
+            Field("搜索游戏（共 ${rows.size} 个）", query) { query = it }
+            if (working) LinearProgressIndicator(Modifier.fillMaxWidth())
+            Error(error)
+            if (rows.isEmpty() && !working) Text("游戏库为空，请导入库文件或新增游戏。", color = Muted)
+            if (rows.size > 50) Text("每次显示前 50 个匹配游戏，可搜索名称缩小范围。", color = Muted)
+            rows.filter { it.getString("name").contains(query.trim(), true) }.take(50).forEach { row ->
+                val name = row.getString("name")
+                GoldPanel {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val bitmap = remember(row) {
+                            val bytes = android.util.Base64.decode(row.getString("icon"), android.util.Base64.DEFAULT)
+                            if (bytes.isEmpty()) null else {
+                                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                                var sample = 1
+                                while (options.outWidth / sample > 96 || options.outHeight / sample > 96) sample *= 2
+                                options.inJustDecodeBounds = false; options.inSampleSize = sample
+                                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                            }
+                        }
+                        DisposableEffect(bitmap) { onDispose { bitmap?.recycle() } }
+                        if (bitmap != null) Image(bitmap.asImageBitmap(), name, Modifier.size(40.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                        Spacer(Modifier.width(10.dp))
+                        Text(name, Modifier.weight(1f))
+                        TextButton(enabled = !working, onClick = { work { library.select(row, store); "已添加到游戏管理：$name" } }) { Text("选择") }
+                        TextButton(enabled = !working, onClick = { work { library.remove(name); "已从库移除，游戏管理中的记录保留" } }) { Text("移除") }
+                    }
+                }
+            }
+        }
+        if (adding) {
+            var name by remember { mutableStateOf("") }
+            val draft = remember { AvatarDraft() }
+            DisposableEffect(Unit) { onDispose { draft.file?.delete() } }
+            EditorDialog("收集游戏", { if (!working) adding = false }) {
+                Field("游戏名称", name) { name = it }
+                AvatarPicker("", draft, name)
+                Error(error)
+                Text("同名条目会补充缺失的图标；更换已有图标时，请先从库移除再收集。", color = Muted)
+                Button(enabled = !working && !draft.loading && name.isNotBlank(), onClick = {
+                    work { library.add(name, draft.file); "已保存到游戏库" }
+                }) { Text("保存到库") }
+            }
+        }
     }
 
     @Composable

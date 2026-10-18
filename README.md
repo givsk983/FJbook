@@ -1,13 +1,12 @@
 # 封禁手册
 
-个人离线游戏封禁管理 Android App，当前版本 **0.2.1**。无需登录或 Root，Android 8.0 及以上。
+个人离线游戏封禁管理 Android App，当前版本 **0.2.2**。无需登录或 Root，Android 8.0 及以上。
 
-## 0.2.1 更新
+## 0.2.2 更新
 
-- 封禁时间、时长输入与倒计时精确到秒。
-- 账号与游戏支持自定义头像，并随完整备份恢复。
-- 主页搜索固定置顶，优化统计与分类布局。
-- 导入入口移至账号页底部，底部导航精简为三项。
+- 新增独立游戏名称与图标库，支持收集、搜索选择和导入导出分享。
+- 添加游戏时可从游戏库选择，或手动填写名称与图标。
+- 导入 / 恢复窗口新增游戏库入口，与个人备份分开管理。
 
 [下载最新版](https://github.com/yunhe4550-design/Termination-Handbook/releases/latest) · [反馈](https://t.me/mbazhuan)
 
@@ -60,7 +59,7 @@
 .\scripts\build.ps1 -SdkRoot C:\Users\1657322\AppData\Local\Android\Sdk
 ```
 
-需要 JDK 17 或以上、Android SDK Platform 36。输出 `dist/chendian-0.2.1.apk`。旧的纯 Java 手工编译流程已由 Gradle 替代。若存在 `build/manual/debug.keystore`，Gradle 会继续使用原调试签名以支持覆盖安装；否则使用标准 Android 调试签名。
+需要 JDK 17 或以上、Android SDK Platform 36。输出 `dist/chendian-0.2.2.apk`。旧的纯 Java 手工编译流程已由 Gradle 替代。若存在 `build/manual/debug.keystore`，Gradle 会继续使用原调试签名以支持覆盖安装；否则使用标准 Android 调试签名。
 
 本次产物是可安装的调试版，不是正式发行签名版。
 
@@ -70,7 +69,7 @@
 .\scripts\test.ps1
 python scripts\test_schema.py
 .\scripts\build-tests.ps1
-adb install -r dist/chendian-0.2.1.apk
+adb install -r dist/chendian-0.2.2.apk
 adb install -r dist/chendian-tests.apk
 adb shell am instrument -w cn.chendian.app.test/cn.chendian.app.AppTests
 ```
@@ -117,3 +116,13 @@ HTML 解析与 OCR 尚未实现，入口不会返回虚假的成功结果。后�
 - 使用 Activity Result API 选择图片、导出和恢复备份；文件读写在 IO 调度器运行。
 - 继续使用 Java 数据库、备份和提醒模块，应用 ID 不变；数据库和备份格式现为版本 4，兼容旧数据迁移及版本 1–3 备份恢复。
 - 主 APK、设备测试 APK 和 Android Lint 可通过 Gradle 构建检查；真机上的视觉、键盘、权限与通知交互仍需验收。
+
+## 独立游戏库
+
+在「游戏管理 → 添加游戏 → 从游戏库选择 / 管理游戏库」中导入、搜索和选择游戏，自动将名称与图标加入游戏管理；也可手动收集游戏，或一键收集游戏管理中的名称和图标。
+
+「导出分享」保存独立 JSON 文件，图标内嵌其中，其他用户可直接导入。只导出游戏名称与图标，不包含账号、角色、封禁记录或设置。重复名称保留现有条目，补充缺失图标；移除库条目不会删除游戏管理中的记录。更换已有库图标可先移除再重新收集。
+
+游戏库独立于个人 ZIP 备份，请另外导出保存。支持最多 2000 个条目、库文件最大 32 MB；收集时图标自动缩小，导入失败不会改动现有库。列表每次显示前 50 个搜索匹配项。
+
+0.2.2：点击「添加游戏」可选择从游戏库添加或手动填写；「导入 → 选择备份」的导入 / 恢复方式窗口也提供游戏库入口。

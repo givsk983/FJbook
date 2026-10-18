@@ -20,6 +20,27 @@ public class AppTests extends Instrumentation {
         Context target=getTargetContext();String name="test-"+Store.uuid()+".db";File testRoot=new File(target.getCacheDir(),"test-"+Store.uuid());testRoot.mkdirs();
         Context isolated=new ContextWrapper(target){@Override public File getFilesDir(){File d=new File(testRoot,"files");d.mkdirs();return d;}@Override public File getCacheDir(){File d=new File(testRoot,"cache");d.mkdirs();return d;}};
         try(Store s=new Store(isolated,name)) {
+            GameLibrary catalog=new GameLibrary(isolated);
+            File icon=new File(isolated.getCacheDir(),"catalog.png");
+            android.graphics.Bitmap bitmap=android.graphics.Bitmap.createBitmap(4,4,android.graphics.Bitmap.Config.ARGB_8888);
+            try(OutputStream png=new FileOutputStream(icon)){bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,png);}bitmap.recycle();
+            check(catalog.add("Catalog Game",icon)==1,"catalog adds name and icon");
+            check(catalog.add("Catalog Game",null)==0,"catalog duplicate preserves icon");
+            ByteArrayOutputStream libraryOut=new ByteArrayOutputStream();catalog.export(libraryOut);
+            JSONObject exportedLibrary=new JSONObject(libraryOut.toString("UTF-8"));
+            check(!exportedLibrary.has("accounts")&&!exportedLibrary.has("bans"),"catalog contains no private records");
+            catalog.remove("Catalog Game");
+            check(catalog.merge(new ByteArrayInputStream(libraryOut.toByteArray()))==1,"catalog roundtrip");
+            check(catalog.merge(new ByteArrayInputStream(libraryOut.toByteArray()))==0,"catalog import idempotent");
+            catalog.select(catalog.read().get(0),s);catalog.select(catalog.read().get(0),s);
+            check(s.query("SELECT * FROM games WHERE name='Catalog Game'").size()==1,"catalog selection deduplicates games");
+            JSONObject catalogAvatar=s.one("SELECT a.file FROM avatars a JOIN games g ON a.gameId=g.id WHERE g.name='Catalog Game'");
+            check(catalogAvatar!=null&&new File(Backup.directory(isolated),catalogAvatar.getString("file")).isFile(),"catalog copies icon");
+            boolean invalidCatalog=false;
+            try{catalog.merge(new ByteArrayInputStream("{}".getBytes("UTF-8")));}catch(Exception expected){invalidCatalog=true;}
+            check(invalidCatalog&&catalog.read().size()==1,"invalid import leaves catalog intact");
+            s.getWritableDatabase().delete("games","name=?",new String[]{"Catalog Game"});
+
             String a=s.ensureAccount("QQ","123456","主号"),g=s.ensureGame("王者荣耀"),z=s.ensureRegion(g,"安卓一区"),r=s.ensureRole(a,z,"888","角色一");
             check(s.ensureAccount("QQ","123456","other").equals(a),"account dedup");check(s.ensureRole(a,z,"888","").equals(r),"role dedup");
             String r2=s.ensureRole(a,z,"889","角色二");long now=System.currentTimeMillis()/60000*60000;
