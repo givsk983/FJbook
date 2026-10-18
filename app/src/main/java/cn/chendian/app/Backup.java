@@ -46,7 +46,8 @@ public final class Backup {
     }
     static boolean safeName(String f) { return f.matches("[a-zA-Z0-9_-]{1,100}\\.(jpg|png|webp|gif|img)"); }
     static void validate(JSONObject root,Map<String,File> files) throws Exception {
-        if(!"chendian-backup".equals(root.getString("format"))||root.getInt("version")!=1)throw new IOException("不是支持的沉淀一下备份（版本 1）");
+        int version=root.getInt("version");
+        if(!"chendian-backup".equals(root.getString("format"))||version<1||version>3)throw new IOException("不是支持的封禁手册备份（版本 1 / 2 / 3）");
         Map<String,Set<String>> ids=new HashMap<>();
         for(String table:Store.TABLES) {
             JSONArray rows=root.getJSONArray(table);if(rows.length()>100000)throw new IOException("记录数量过大");
@@ -54,10 +55,25 @@ public final class Backup {
             for(int i=0;i<rows.length();i++) {
                 JSONObject row=rows.getJSONObject(i);String id=required(row,"id");if(!table.equals("settings")&&!id.matches("[A-Za-z0-9_-]{1,100}"))throw new IOException("数据 ID 无效");if(!seen.add(id))throw new IOException("备份中存在重复 ID");
                 switch(table) {
-                    case "accounts": if(!Arrays.asList("QQ","微信").contains(row.getString("type")))throw new IOException("未知登录类型");required(row,"identifier");row.getString("name");break;
+                    case "accounts":
+                        if(!Arrays.asList("QQ","微信").contains(row.getString("type")))throw new IOException("未知登录类型");
+                        String identifier=row.getString("identifier"),accountName=row.getString("name");
+                        if(identifier.length()>10000||accountName.length()>10000||(identifier.trim().isEmpty()&&accountName.trim().isEmpty()))throw new IOException("账号和昵称至少填写一项");
+                        if(version<3)required(row,"identifier");
+                        break;
                     case "games": required(row,"name");break;
-                    case "regions": ref(ids,"games",row,"gameId");required(row,"name");break;
-                    case "roles": ref(ids,"accounts",row,"accountId");ref(ids,"regions",row,"regionId");required(row,"roleId");row.getString("nickname");break;
+                    case "regions":
+                        ref(ids,"games",row,"gameId");
+                        if(version==1){required(row,"name");row.put("platform","");}
+                        else if(row.getString("name").length()>10000||row.getString("platform").length()>10000||
+                            (row.getString("name").trim().isEmpty()&&row.getString("platform").trim().isEmpty()))throw new IOException("平台或大区无效");
+                        break;
+                    case "roles":
+                        ref(ids,"accounts",row,"accountId");ref(ids,"regions",row,"regionId");
+                        String roleId=row.getString("roleId"),nickname=row.getString("nickname");
+                        if(roleId.length()>10000||nickname.length()>10000||(roleId.trim().isEmpty()&&nickname.trim().isEmpty()))throw new IOException("角色昵称和 ID 不能同时为空");
+                        if(version==1)required(row,"roleId");
+                        break;
                     case "bans":
                         ref(ids,"roles",row,"roleId");long start=row.getLong("start"),end=row.getLong("end"),confirmed=row.getLong("confirmed");
                         int p=row.getInt("permanent"),m=row.getInt("remind");
@@ -101,10 +117,17 @@ public final class Backup {
                     for(int i=0;i<rows.length();i++) {
                         JSONObject row=rows.getJSONObject(i);String source=row.getString("id"),target;
                         switch(table) {
-                            case "accounts": target=entity(s,table,row,"type=? AND identifier=?",row.getString("type"),row.getString("identifier"));account.put(source,target);break;
+                            case "accounts":
+                                if(row.getString("identifier").isEmpty())target=entity(s,table,row,"type=? AND identifier='' AND name=?",row.getString("type"),row.getString("name"));
+                                else target=entity(s,table,row,"type=? AND identifier=?",row.getString("type"),row.getString("identifier"));
+                                account.put(source,target);break;
                             case "games": target=entity(s,table,row,"name=?",row.getString("name"));game.put(source,target);break;
-                            case "regions": row.put("gameId",game.get(row.getString("gameId")));target=entity(s,table,row,"gameId=? AND name=?",row.getString("gameId"),row.getString("name"));region.put(source,target);break;
-                            case "roles": row.put("accountId",account.get(row.getString("accountId"))).put("regionId",region.get(row.getString("regionId")));target=entity(s,table,row,"accountId=? AND regionId=? AND roleId=?",row.getString("accountId"),row.getString("regionId"),row.getString("roleId"));role.put(source,target);break;
+                            case "regions": row.put("gameId",game.get(row.getString("gameId")));target=entity(s,table,row,"gameId=? AND platform=? AND name=?",row.getString("gameId"),row.getString("platform"),row.getString("name"));region.put(source,target);break;
+                            case "roles":
+                                row.put("accountId",account.get(row.getString("accountId"))).put("regionId",region.get(row.getString("regionId")));
+                                if(row.getString("roleId").isEmpty())target=entity(s,table,row,"accountId=? AND regionId=? AND roleId='' AND nickname=?",row.getString("accountId"),row.getString("regionId"),row.getString("nickname"));
+                                else target=entity(s,table,row,"accountId=? AND regionId=? AND roleId=?",row.getString("accountId"),row.getString("regionId"),row.getString("roleId"));
+                                role.put(source,target);break;
                             case "bans":
                                 String rid=role.get(row.getString("roleId"));
                                 JSONObject old=s.one("SELECT id FROM bans WHERE roleId=? AND start=? AND end=? AND permanent=? AND reason=? AND note=?",rid,row.getString("start"),row.getString("end"),row.getString("permanent"),row.getString("reason"),row.getString("note"));

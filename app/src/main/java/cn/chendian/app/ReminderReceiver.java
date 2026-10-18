@@ -20,7 +20,12 @@ public class ReminderReceiver extends BroadcastReceiver {
             Reminders.channel(c);
             Intent open=new Intent(c,MainActivity.class).setData(Uri.parse("chendian://ban/"+id)).putExtra("banId",id).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
             PendingIntent content=PendingIntent.getActivity(c,0,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-            String text=b.optString("game")+" · "+b.optString("region")+" · "+b.optString("gameRoleId");
+            java.util.StringJoiner labels=new java.util.StringJoiner(" · ");
+            for(String field:new String[]{"game","platform","region","nickname"}) {
+                String value=b.optString(field);if(!value.trim().isEmpty())labels.add(value);
+            }
+            if(!b.optString("gameRoleId").trim().isEmpty())labels.add("ID "+b.optString("gameRoleId"));
+            String text=labels.toString();
             Notification n=new Notification.Builder(c,Reminders.CHANNEL).setSmallIcon(cn.chendian.app.R.drawable.ic_notification)
                 .setContentTitle(phase==1?"还有一天预计解封":"已到预计解封时间")
                 .setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text+"\n请进入游戏核实，实际解封后可在详情手动确认。"))

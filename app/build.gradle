@@ -1,4 +1,8 @@
-plugins { id 'com.android.application' }
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+}
 android {
     namespace 'cn.chendian.app'
     compileSdk 36
@@ -6,9 +10,30 @@ android {
         applicationId 'cn.chendian.app'
         minSdk 26
         targetSdk 35
-        versionCode 3
-        versionName '0.1.2'
+        versionCode 4
+        versionName '0.2.0'
         testInstrumentationRunner 'cn.chendian.app.AppTests'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = '17' }
+    buildFeatures { compose true; buildConfig true }
+    sourceSets { androidTest.assets.srcDirs += rootProject.file('scripts/fixtures') }
+    signingConfigs {
+        debug {
+            if (rootProject.file('build/manual/debug.keystore').exists()) {
+                storeFile rootProject.file('build/manual/debug.keystore')
+                storePassword 'android'
+                keyAlias 'chendian-debug'
+                keyPassword 'android'
+            }
+        }
+    }
+}
+dependencies {
+    implementation platform('androidx.compose:compose-bom:2025.05.01')
+    implementation 'androidx.activity:activity-compose:1.10.1'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.material3:material3'
+    debugImplementation 'androidx.compose.ui:ui-tooling'
 }
