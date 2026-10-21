@@ -103,6 +103,8 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Handbook() {
+        val context = LocalContext.current
+        val themeMode = LocalThemeMode.current
         var tab by rememberSaveable { mutableIntStateOf(0) }
         var detail by rememberSaveable { mutableStateOf<String?>(null) }
         var role by rememberSaveable { mutableStateOf<String?>(null) }
@@ -360,6 +362,13 @@ class MainActivity : ComponentActivity() {
                     }
                     else -> {
                         item { Heading("设置") }
+                        item { GoldPanel {
+                            Text("外观", fontSize = 22.sp, color = Gold)
+                            Choice("主题模式", ThemeMode.entries.map { it.label }, themeMode.label) { label ->
+                                setThemeMode(context, ThemeMode.entries.first { it.label == label })
+                            }
+                            Text("切换后立即生效，并自动记住选择。", color = Muted, style = MaterialTheme.typography.bodySmall)
+                        } }
                         item { GoldPanel { Text("默认提醒", fontSize = 22.sp, color = Gold); Choice("提醒规则", ReminderLabels, ReminderLabels[store.defaultReminder().coerceIn(0, 3)]) { store.setting("defaultRemind", ReminderLabels.indexOf(it).toString()); refresh() }; Action("通知权限与管理") { notifications() } } }
                         item { GoldPanel { Text("备份与恢复", fontSize = 22.sp, color = Gold); Text("支持恢复账号备份，也可导入游戏名称与图标库。", color = Muted, style = MaterialTheme.typography.bodySmall); Action("导出备份") { export.launch("封禁手册_${LocalDate.now()}.zip") }; Action("恢复备份 / 导入游戏库") { restoreOpen = true } } }
                         item { GoldPanel {

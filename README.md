@@ -1,11 +1,12 @@
 # 封禁手册
 
-个人离线游戏封禁管理 Android App，当前版本 **0.2.3**。无需登录或 Root，Android 8.0 及以上。
+个人离线游戏封禁管理 Android App，当前版本 **0.2.4**。无需登录或 Root，Android 8.0 及以上。
 
-## 0.2.3 更新
+## 0.2.4 更新
 
-- 新增浅色模式，自动跟随手机系统的浅色 / 深色设置。
-- 适配卡片、文字、弹窗和系统栏，保留深色黑金风格。
+- 设置 → 外观支持「跟随系统 / 浅色 · 铂金银 / 深色 · 黑金」，切换立即生效，重启后保留选择。
+- 浅色模式切换为铂金银质感，采用冷白背景、银灰强调色、金属高光渐变卡片与银色细边框。
+- 按钮、文字、弹窗及系统栏同步浅色配色，暗色模式保持黑金风格，继续自动跟随系统。
 
 [下载最新版](https://github.com/yunhe4550-design/Termination-Handbook/releases/latest) · [反馈](https://t.me/mbazhuan)
 
@@ -22,7 +23,7 @@
 - 预计解封、提前 24 小时、两者都提醒及不提醒；默认规则可设置。
 - 点击系统通知进入封禁详情；确认实际解封会取消该次后续提醒。
 - 完整 ZIP 备份，支持合并、替换、重复检查、附件恢复和恢复前校验。
-- Compose 黑金渐变卡片、细边框、展开动效；底部保留总览、账号、设置三项导航，导入入口位于账号页底部居中。
+- Compose 黑金 / 铂金银渐变卡片、细边框、展开动效；底部保留总览、账号、设置三项导航，导入入口位于账号页底部居中。
 - HTTPS 内置浏览器、图片选择预览入口，明确提示识别功能待完善。
 
 ## 状态与统计规则
@@ -58,7 +59,7 @@
 .\scripts\build.ps1 -SdkRoot C:\Users\1657322\AppData\Local\Android\Sdk
 ```
 
-需要 JDK 17 或以上、Android SDK Platform 36。输出 `dist/chendian-0.2.3.apk`。旧的纯 Java 手工编译流程已由 Gradle 替代。若存在 `build/manual/debug.keystore`，Gradle 会继续使用原调试签名以支持覆盖安装；否则使用标准 Android 调试签名。
+需要 JDK 17 或以上、Android SDK Platform 36。输出 `dist/chendian-0.2.4.apk`。旧的纯 Java 手工编译流程已由 Gradle 替代。若存在 `build/manual/debug.keystore`，Gradle 会继续使用原调试签名以支持覆盖安装；否则使用标准 Android 调试签名。
 
 本次产物是可安装的调试版，不是正式发行签名版。
 
@@ -68,7 +69,7 @@
 .\scripts\test.ps1
 python scripts\test_schema.py
 .\scripts\build-tests.ps1
-adb install -r dist/chendian-0.2.3.apk
+adb install -r dist/chendian-0.2.4.apk
 adb install -r dist/chendian-tests.apk
 adb shell am instrument -w cn.chendian.app.test/cn.chendian.app.AppTests
 ```
@@ -92,7 +93,7 @@ HTML 解析与 OCR 尚未实现，入口不会返回虚假的成功结果。后�
 - `Store.java`：SQLite 关系模型与查询。
 - `BanTime.java`：时间、状态、倒计时规则。
 - `MainActivity.kt`：Compose 三个主页面、账号页导入入口、声明式状态、录入弹窗、历史和详情流程。
-- `ui/Theme.kt`：黑金配色、统一卡片与可预览的 Compose 组件。
+- `ui/Theme.kt`：暗色黑金 / 浅色铂金银配色、统一卡片与可预览的 Compose 组件。
 - `Reminders.java`、`ReminderReceiver.java`、`BootReceiver.java`：提醒调度、通知和系统事件恢复。
 - `Backup.java`：版本化备份、合并与替换。
 - `BrowserActivity.kt`：Compose 浏览器界面及受限 HTTPS WebView。
