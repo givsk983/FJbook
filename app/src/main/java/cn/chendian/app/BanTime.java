@@ -5,6 +5,8 @@ import java.time.*;
 /** Time and status rules independent of Android; expiry is never an unlock confirmation. */
 public final class BanTime {
     public static final String ACTIVE="封禁中", DUE="已到预计解封时间", CONFIRMED="已确认解封", PERMANENT="永久封禁";
+    public static final String COOLING="冷号中 · 高风险", COOLED="冷号已完成";
+    public static String cooldownState(long end,long now) { return end<=now?COOLED:COOLING; }
     private BanTime() {}
     public static String state(long start, long end, boolean permanent, long confirmed, long now) {
         if (confirmed > 0) return CONFIRMED;

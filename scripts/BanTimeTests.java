@@ -29,6 +29,10 @@ public class BanTimeTests {
         failed=false;try{BanTime.end(start,Long.MAX_VALUE,0,0);}catch(ArithmeticException e){failed=true;}check(failed,"overflow rejected");
         failed=false;try{BanTime.end(start,0,0,0,-1);}catch(IllegalArgumentException e){failed=true;}check(failed,"negative seconds rejected");
         failed=false;try{BanTime.end(start,0,0,0,Long.MAX_VALUE);}catch(ArithmeticException e){failed=true;}check(failed,"seconds overflow rejected");
+        for (int days : new int[]{1,3,7}) check(BanTime.end(start,days,0,0)-start==days*86400000L,"cooldown preset "+days);
+        check(BanTime.cooldownState(end,end-1).equals(BanTime.COOLING),"cooldown active until exact boundary");
+        check(BanTime.cooldownState(end,end).equals(BanTime.COOLED),"cooldown completes without unlock confirmation");
+        check(BanTime.cooldownState(end,end+1).equals(BanTime.COOLED),"cooldown stays complete");
         System.out.println("PASS "+count+" time/status assertions");
     }
 }

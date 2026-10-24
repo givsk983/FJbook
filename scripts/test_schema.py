@@ -29,7 +29,7 @@ def sql_statements(body):
             yield sql
 
 schema = list(sql_statements(method_body('onCreate')))
-assert len(schema) == 14, len(schema)
+assert len(schema) == 15, len(schema)
 db = sqlite3.connect(':memory:')
 db.execute('PRAGMA foreign_keys=ON')
 for statement in schema:
@@ -81,7 +81,7 @@ check(rejected("INSERT INTO roles VALUES('dup','a','cross','','昵称一')"), 'n
 check(rejected("INSERT INTO regions VALUES('dup','g','一区','安卓')"), 'platform-region uniqueness')
 check(db.execute("SELECT count(*) FROM regions WHERE name='一区'").fetchone()[0] == 3, 'same region across platforms')
 for id_, role, start, created in [('old','r',100,300),('latest','r',200,250),('tie','r',200,350),('other','s',100,100)]:
-    db.execute("INSERT INTO bans VALUES(?,?,?,9999,0,0,'','',1,?)", (id_, role, start, created))
+    db.execute("INSERT INTO bans(id,roleId,start,end,permanent,confirmed,reason,note,remind,created) VALUES(?,?,?,9999,0,0,'','',1,?)", (id_, role, start, created))
 rows = db.execute('SELECT id,roleId FROM bans ORDER BY start DESC,created DESC,id DESC').fetchall()
 seen, current = set(), []
 for id_, role in rows:
@@ -116,7 +116,7 @@ legacy.execute("INSERT INTO accounts VALUES('a','QQ','123','旧账号')")
 legacy.execute("INSERT INTO games VALUES('g','王者荣耀')")
 legacy.execute("INSERT INTO regions VALUES('z','g','安卓一区')")
 legacy.execute("INSERT INTO roles VALUES('r','a','z','888','')")
-legacy.execute("INSERT INTO bans VALUES('b','r',100,9999,0,0,'','',1,100)")
+legacy.execute("INSERT INTO bans(id,roleId,start,end,permanent,confirmed,reason,note,remind,created) VALUES('b','r',100,9999,0,0,'','',1,100)")
 legacy.execute("INSERT INTO attachments VALUES('shot','b','old.img','image/png')")
 legacy.commit()
 with legacy:
@@ -140,7 +140,7 @@ v2.execute("INSERT INTO accounts VALUES('a','微信','wx-old','旧微信昵称')
 v2.execute("INSERT INTO games VALUES('g','三角洲')")
 v2.execute("INSERT INTO regions VALUES('z','g','','全平台')")
 v2.execute("INSERT INTO roles VALUES('r','a','z','','角色昵称')")
-v2.execute("INSERT INTO bans VALUES('b','r',100,9999,0,0,'','',1,100)")
+v2.execute("INSERT INTO bans(id,roleId,start,end,permanent,confirmed,reason,note,remind,created) VALUES('b','r',100,9999,0,0,'','',1,100)")
 v2.commit()
 with v2:
     for statement in sql_statements(method_body('migrateAccounts')):
@@ -155,4 +155,22 @@ v2.execute(constants['AVATARS_SQL'])
 v2.execute("INSERT INTO avatars VALUES('avatar','a',NULL,'avatar.img')")
 check(not v2.execute('PRAGMA foreign_key_check').fetchall(), 'v3 avatar migration retains relationships')
 check(v2.execute('SELECT count(*) FROM bans').fetchone()[0] == 1, 'v3 avatar migration retains bans')
+# Replay the v4 -> v5 addition against the previous production schema.
+v4 = sqlite3.connect(':memory:')
+v4.execute('PRAGMA foreign_keys=ON')
+for statement in schema:
+    if statement != constants['KIND_SQL']:
+        v4.execute(statement)
+v4.execute("INSERT INTO accounts VALUES('a','QQ','123','主号')")
+v4.execute("INSERT INTO games VALUES('g','游戏')")
+v4.execute("INSERT INTO regions VALUES('z','g','','全平台')")
+v4.execute("INSERT INTO roles VALUES('r','a','z','','角色')")
+v4.execute("INSERT INTO bans VALUES('ban','r',100,9999,0,0,'','',1,100)")
+v4.execute(constants['KIND_SQL'])
+check(v4.execute("SELECT kind FROM bans").fetchone()[0] == 'ban', 'v4 records remain bans')
+v4.execute("INSERT INTO bans VALUES('cold','r',100,9999,0,0,'','',1,101,'cooldown')")
+check(v4.execute("SELECT count(*) FROM bans WHERE kind='ban'").fetchone()[0] == 1, 'cooldown does not count as ban')
+check(not v4.execute('PRAGMA foreign_key_check').fetchall(), 'v4 migration keeps relations')
+v4.execute("DELETE FROM roles WHERE id='r'")
+check(v4.execute('SELECT count(*) FROM bans').fetchone()[0] == 0, 'role deletion removes cooldowns too')
 print(f'PASS {checks} SQLite hierarchy and transaction assertions')

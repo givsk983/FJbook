@@ -19,6 +19,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
@@ -59,7 +60,12 @@ import java.util.Locale
 private val ReminderLabels = listOf("不提醒", "到期当天", "提前一天", "两者都提醒")
 private val DateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 private fun formatted(time: Long) = Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault()).format(DateFormat)
-private fun status(b: JSONObject, now: Long = System.currentTimeMillis()) = BanTime.state(b.optLong("start"), b.optLong("end"),
+private fun JSONObject.isCooldown() = optString("kind") == "cooldown"
+private const val Cooling = BanTime.COOLING
+private const val Cooled = BanTime.COOLED
+private fun status(b: JSONObject, now: Long = System.currentTimeMillis()) = if (b.isCooldown()) {
+    BanTime.cooldownState(b.optLong("end"), now)
+} else BanTime.state(b.optLong("start"), b.optLong("end"),
     b.optInt("permanent") == 1, b.optLong("confirmed"), now)
 private fun JSONObject.title() = optString("name").ifBlank { optString("identifier") }
 private fun JSONObject.accountLabel(ban: Boolean = false) = listOf(optString("type"), optString("identifier").ifBlank { optString(if (ban) "accountName" else "name") }).filter { it.isNotBlank() }.joinToString(" · ")
@@ -174,7 +180,7 @@ class MainActivity : ComponentActivity() {
                                 requireNotNull(input) { "无法打开备份" }; Backup.restore(this@MainActivity, workerStore, input, replacing)
                             } } finally { Reminders.schedule(this@MainActivity, workerStore) }
                         }
-                    }; "恢复完成，新增 $count 条封禁记录"
+                    }; "恢复完成，新增 $count 条记录"
                 }, {
                     detail = null; role = null; account = null
                     game = store.one("SELECT value FROM settings WHERE id=?", "overviewGame")?.optString("value") ?: "全部游戏"
@@ -249,29 +255,29 @@ class MainActivity : ComponentActivity() {
                         item { BanCard(b, current.contains(id), clockTime) {} }
                         item { GoldPanel {
                             val values = listOf("账号" to b.accountLabel(true),
-                                "昵称" to b.optString("nickname"), "封禁开始" to formatted(b.optLong("start")),
-                                "预计解封" to if (b.optInt("permanent") == 1) "永久" else formatted(b.optLong("end")),
-                                "封禁时长" to if (b.optInt("permanent") == 1) "永久" else durationText(b.optLong("end") - b.optLong("start")),
-                                "实际确认解封" to if (b.optLong("confirmed") > 0) formatted(b.optLong("confirmed")) else "尚未确认",
-                                "提醒" to ReminderLabels[b.optInt("remind").coerceIn(0, 3)], "原因" to b.optString("reason"), "备注" to b.optString("note"))
+                                "昵称" to b.optString("nickname"), (if (b.isCooldown()) "冷号开始" else "封禁开始") to formatted(b.optLong("start")),
+                                (if (b.isCooldown()) "冷号结束" else "预计解封") to if (b.optInt("permanent") == 1) "永久" else formatted(b.optLong("end")),
+                                (if (b.isCooldown()) "冷号时长" else "封禁时长") to if (b.optInt("permanent") == 1) "永久" else durationText(b.optLong("end") - b.optLong("start")),
+                                (if (b.isCooldown()) "记录类型" else "实际确认解封") to if (b.isCooldown()) "高风险冷号期，不计入封禁" else if (b.optLong("confirmed") > 0) formatted(b.optLong("confirmed")) else "尚未确认",
+                                "提醒" to if (b.isCooldown()) (if (b.optInt("remind") == 1) "冷号完成通知" else "不提醒") else ReminderLabels[b.optInt("remind").coerceIn(0, 3)], "原因" to b.optString("reason"), "备注" to b.optString("note"))
                             values.forEach { (label, value) -> Text(label, color = Gold, style = MaterialTheme.typography.labelMedium); androidx.compose.foundation.text.selection.SelectionContainer { Text(value.ifBlank { "未填写" }) } }
                         } }
                         items(store.query("SELECT * FROM attachments WHERE banId=?", id), key = { "attachment:${it.optString("id")}" }) { Screenshot(File(Backup.directory(this@MainActivity), it.optString("file"))) }
-                        item { Action(if (b.optLong("confirmed") == 0L) "确认实际已解封" else "撤销解封确认") {
+                        item { if (!b.isCooldown()) Action(if (b.optLong("confirmed") == 0L) "确认实际已解封" else "撤销解封确认") {
                             confirmation = Confirmation("确认解封状态？", "请先在游戏中核实，提醒将随确认状态更新。") {
                                 store.writableDatabase.execSQL("UPDATE bans SET confirmed=? WHERE id=?", arrayOf(if (b.optLong("confirmed") == 0L) System.currentTimeMillis() else 0L, id)); refresh()
                             }
-                        }; Action("编辑封禁记录") { editor = Editor.Ban(b.optString("roleId"), b) }
-                            Action("记录该角色新的封禁") { editor = Editor.Ban(b.optString("roleId")) }
-                            Action("删除本次封禁记录") { confirmation = Confirmation("删除封禁记录？", "本次记录和附件将被删除，无法撤销。") { Reminders.cancel(this@MainActivity, id); store.writableDatabase.delete("bans", "id=?", arrayOf(id)); detail = null; refresh() } }
+                        }; Action(if (b.isCooldown()) "编辑冷号记录" else "编辑封禁记录") { editor = Editor.Ban(b.optString("roleId"), b) }
+                            Action("记录该角色新的封禁") { editor = Editor.Ban(b.optString("roleId")) }; Action("快速冷号") { editor = Editor.Ban(b.optString("roleId"), cooldown = true) }
+                            Action(if (b.isCooldown()) "删除本次冷号记录" else "删除本次封禁记录") { confirmation = Confirmation("删除本次记录？", "本次记录和附件将被删除，无法撤销。") { Reminders.cancel(this@MainActivity, id); store.writableDatabase.delete("bans", "id=?", arrayOf(id)); detail = null; refresh() } }
                         }
                     }
                     selectedRole != null -> {
                         val r = selectedRole
                         item { TextButton(onClick = { role = null }) { Text("‹ 返回账号") }; Heading(r.optString("nickname").ifBlank { r.optString("roleId") }, "${r.optString("game")} · ${r.location()}" + if (r.optString("roleId").isNotBlank()) " · ID ${r.optString("roleId")}" else "") }
-                        item { Action("＋ 新增一次封禁") { editor = Editor.Ban(r.optString("id")) }; Action("编辑角色") { editor = Editor.Role(r.optString("accountId"), r) } }
+                        item { Action("快速冷号") { editor = Editor.Ban(r.optString("id"), cooldown = true) }; Action("＋ 新增一次封禁") { editor = Editor.Ban(r.optString("id")) }; Action("编辑角色") { editor = Editor.Role(r.optString("accountId"), r) } }
                         val records = bans.filter { it.optString("roleId") == r.optString("id") }
-                        if (records.isEmpty()) item { Empty("这个角色还没有封禁记录") }
+                        if (records.isEmpty()) item { Empty("这个角色还没有封禁或冷号记录") }
                         items(records, key = { it.optString("id") }) { BanCard(it, current.contains(it.optString("id")), clockTime) { detail = it.optString("id") } }
                     }
                     tab == 0 -> {
@@ -281,8 +287,10 @@ class MainActivity : ComponentActivity() {
                             else game == "全部游戏" || game == b.optString("game") }
                         item { GoldPanel { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             val now = clockTime
-                            listOf("封禁中角色" to active.count { status(it) == BanTime.ACTIVE }, "今日预计解封" to active.count { it.optInt("permanent") == 0 && it.optLong("confirmed") == 0L && BanTime.today(it.optLong("end"), now, ZoneId.systemDefault()) }, "永久封禁" to active.count { status(it) == BanTime.PERMANENT }).forEach { (label, count) -> Column { Text("$count", fontSize = 28.sp, color = Gold); Text(label, fontSize = 11.sp, color = Muted) } }
-                        } } }
+                            listOf("封禁中角色" to active.count { status(it) == BanTime.ACTIVE }, "今日预计解封" to active.count { !it.isCooldown() && it.optInt("permanent") == 0 && it.optLong("confirmed") == 0L && BanTime.today(it.optLong("end"), now, ZoneId.systemDefault()) }, "永久封禁" to active.count { status(it) == BanTime.PERMANENT }).forEach { (label, count) -> Column { Text("$count", fontSize = 28.sp, color = Gold); Text(label, fontSize = 11.sp, color = Muted) } }
+                        }
+                            Text("冷号中（高风险）：${active.count { status(it, clockTime) == Cooling }} 个角色 · 不计入封禁", color = Muted, fontSize = 12.sp)
+                        } }
                         item { SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                             listOf("按游戏", "按账号").forEachIndexed { index, label ->
                                 SegmentedButton(selected = byAccount == (index == 1),
@@ -307,16 +315,16 @@ class MainActivity : ComponentActivity() {
                         } } }
                         val needle = search.trim().lowercase(Locale.ROOT)
                         val records = active.filter { b ->
-                            status(b, clockTime) != BanTime.CONFIRMED &&
+                            status(b, clockTime) != BanTime.CONFIRMED && status(b, clockTime) != Cooled &&
                                 listOf("identifier", "accountName", "game", "platform", "region", "gameRoleId", "nickname", "note", "reason").joinToString(" ") { b.optString(it) }.lowercase(Locale.ROOT).contains(needle)
-                        }.sortedWith(compareBy<JSONObject> { if (status(it) == BanTime.ACTIVE) it.optLong("end") else Long.MAX_VALUE }.thenByDescending { it.optLong("start") })
+                        }.sortedWith(compareBy<JSONObject> { if (status(it, clockTime) in listOf(BanTime.ACTIVE, Cooling)) it.optLong("end") else Long.MAX_VALUE }.thenByDescending { it.optLong("start") })
                         val groups = records.groupBy { it.optString("accountId") to it.optString("regionId") }.values.toList()
-                        if (groups.isEmpty()) item { Empty(if (search.isBlank()) "暂无封禁账号" else "没有匹配的账号") }
+                        if (groups.isEmpty()) item { Empty(if (search.isBlank()) "暂无封禁或冷号账号" else "没有匹配的账号") }
                         items(groups, key = { rows -> rows.first().let { b -> "overview:${b.optString("accountId")}:${b.optString("regionId")}" } }) { rows ->
                             var expanded by remember(byAccount, game, overviewAccount) { mutableStateOf(false) }
-                            val lead = rows.firstOrNull { status(it) == BanTime.ACTIVE } ?: rows.first()
+                            val lead = rows.firstOrNull { status(it, clockTime) in listOf(BanTime.ACTIVE, Cooling) } ?: rows.first()
                             GoldPanel(Modifier.animateContentSize().clickable { if (rows.size == 1) detail = lead.optString("id") else expanded = !expanded }) {
-                                Text((if (byAccount) lead.optString("accountName").ifBlank { lead.optString("identifier") } else lead.optString("game")) + " · " + status(lead), color = Muted, fontSize = 12.sp)
+                                Text((if (byAccount) lead.optString("accountName").ifBlank { lead.optString("identifier") } else lead.optString("game")) + " · " + status(lead, clockTime), color = Muted, fontSize = 12.sp)
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     val title = if (byAccount) lead.optString("game") else lead.optString("accountName").ifBlank { lead.optString("identifier") }
                                     Avatar(if (byAccount) gameAvatars[lead.optString("game")].orEmpty() else accountAvatars[lead.optString("accountId")].orEmpty(), title)
@@ -328,12 +336,12 @@ class MainActivity : ComponentActivity() {
                                 if (roleCount > 2) Text("另有 ${roleCount - 2} 个角色", color = Muted, fontSize = 12.sp)
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                                 Text(remaining(lead, clockTime), fontSize = 23.sp, color = Gold)
-                                Text(if (lead.optInt("permanent") == 1) "无预计解封时间" else "${formatted(lead.optLong("end"))} 预计解封", color = Muted, fontSize = 12.sp)
+                                Text(if (lead.optInt("permanent") == 1) "无预计解封时间" else "${formatted(lead.optLong("end"))} ${if (lead.isCooldown()) "冷号结束" else "预计解封"}", color = Muted, fontSize = 12.sp)
                                 AnimatedVisibility(expanded) {
                                     Column {
                                         rows.forEach { b ->
                                             TextButton(onClick = { detail = b.optString("id") }) {
-                                                Text("${b.location()} · ${b.roleLabel()} · ${status(b)}")
+                                                Text("${b.location()} · ${b.roleLabel()} · ${status(b, clockTime)}")
                                             }
                                         }
                                     }
@@ -354,7 +362,27 @@ class MainActivity : ComponentActivity() {
                                 AnimatedVisibility(account == id) { Column {
                                     Action("编辑账号") { editor = Editor.Account(a) }; Action("＋ 添加游戏角色") { editor = Editor.Role(id) }
                                     store.query("SELECT r.*,z.name AS region,z.platform,g.name AS game FROM roles r JOIN regions z ON z.id=r.regionId JOIN games g ON g.id=z.gameId WHERE r.accountId=? ORDER BY g.name,z.platform,z.name,r.nickname,r.roleId", id).forEach { r ->
-                                        TextButton(onClick = { role = r.optString("id") }) { Text("${r.optString("game")} / ${r.location()}\n${r.roleLabel("roleId")}") }
+                                        Surface(
+                                            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                                            shape = MaterialTheme.shapes.medium,
+                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+                                        ) {
+                                            Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Column(Modifier.weight(1f).clip(MaterialTheme.shapes.small)
+                                                    .clickable { role = r.optString("id") }.padding(8.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Text("${r.optString("game")} / ${r.location()}", color = Muted,
+                                                        style = MaterialTheme.typography.labelMedium)
+                                                    Text(r.roleLabel("roleId"), color = Gold,
+                                                        style = MaterialTheme.typography.bodyLarge)
+                                                }
+                                                OutlinedButton(onClick = { editor = Editor.Ban(r.optString("id"), cooldown = true) }) {
+                                                    Text("快速冷号")
+                                                }
+                                            }
+                                        }
                                     }
                                 } }
                             }
@@ -374,7 +402,8 @@ class MainActivity : ComponentActivity() {
                         item { GoldPanel {
                             Text("关于与反馈", fontSize = 22.sp, color = Gold)
                             listOf(
-                                "GitHub 仓库" to "https://github.com/yunhe4550-design/Termination-Handbook",
+                                "GitHub 新仓库" to "https://github.com/givsk983/FJbook",
+                                "GitHub 旧仓库（申诉中）" to "https://github.com/yunhe4550-design/Termination-Handbook",
                                 "Telegram 反馈" to "https://t.me/mbazhuan"
                             ).forEach { (label, url) ->
                                 TextButton(onClick = { openExternalLink(url) }, modifier = Modifier.fillMaxWidth()) {
@@ -720,6 +749,9 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun BanEditor(e: Editor.Ban, store: Store, dismiss: () -> Unit, saved: (String?) -> Unit, notify: () -> Unit) {
+        val cooling = e.cooldown
+        val label = if (cooling) "冷号" else "封禁"
+        var preset by remember { mutableStateOf(if (e.old == null) "1天" else "自定义") }
         var start by remember { mutableLongStateOf(e.old?.optLong("start") ?: (System.currentTimeMillis() / 1000 * 1000)) }
         var end by remember { mutableLongStateOf(e.old?.optLong("end")?.takeIf { it > start } ?: (start + 86400000)) }
         var days by remember { mutableStateOf(((end - start) / 86400000).toString()) }
@@ -727,8 +759,10 @@ class MainActivity : ComponentActivity() {
         var minutes by remember { mutableStateOf(((end - start) / 60000 % 60).toString()) }
         var seconds by remember { mutableStateOf(((end - start) / 1000 % 60).toString()) }
         var permanent by remember { mutableStateOf(e.old?.optInt("permanent") == 1) }
-        var mode by remember { mutableStateOf("填写封禁时长") }
-        var reminder by remember { mutableStateOf(ReminderLabels[(e.old?.optInt("remind") ?: store.defaultReminder()).coerceIn(0, 3)]) }
+        val durationMode = "填写${label}时长"
+        val dateMode = if (cooling) "填写冷号结束时间" else "填写预计解封时间"
+        var mode by remember { mutableStateOf(durationMode) }
+        var reminder by remember { mutableStateOf(ReminderLabels[(e.old?.optInt("remind") ?: (if (cooling) 1 else store.defaultReminder())).coerceIn(0, 3)]) }
         var reason by remember { mutableStateOf(e.old?.optString("reason") ?: "") }
         var note by remember { mutableStateOf(e.old?.optString("note") ?: "") }
         var error by remember { mutableStateOf("") }
@@ -746,26 +780,36 @@ class MainActivity : ComponentActivity() {
                 } catch (x: Exception) { staged.forEach { it.delete() }; error = x.message ?: "添加失败" } finally { copying = false }
             } }
         }
-        val calculated = if (permanent) 0L else if (mode == "填写预计解封时间") end else runCatching { BanTime.end(start, days.ifBlank { "0" }.toLong(), hours.ifBlank { "0" }.toLong(), minutes.ifBlank { "0" }.toLong(), seconds.ifBlank { "0" }.toLong()) }.getOrNull()
-        EditorDialog(if (e.old == null) "新增封禁记录" else "编辑封禁记录", { if (!copying) dismiss() }) {
+        val calculated = if (permanent) 0L else if (mode == dateMode) end else runCatching { BanTime.end(start, days.ifBlank { "0" }.toLong(), hours.ifBlank { "0" }.toLong(), minutes.ifBlank { "0" }.toLong(), seconds.ifBlank { "0" }.toLong()) }.getOrNull()
+        EditorDialog(if (e.old == null) (if (cooling) "快速冷号" else "新增封禁记录") else "编辑${label}记录", { if (!copying) dismiss() }) {
             val r = remember { store.one("SELECT r.roleId,r.nickname,g.name AS game,z.name AS region,z.platform FROM roles r JOIN regions z ON z.id=r.regionId JOIN games g ON g.id=z.gameId WHERE r.id=?", e.role) }
             r?.let { Text("${it.optString("game")} · ${it.location()} · ${it.roleLabel("roleId")}", color = Muted) }
-            DateAction("封禁开始时间", start) { start = it }
-            Toggle("永久封禁", permanent) { permanent = it }
+            if (cooling) Text("冷号用于高风险期间的暂时停用，不计入封禁；到期自动完成。", color = Muted)
+            DateAction("${label}开始时间", start) { start = it }
+            if (!cooling) Toggle("永久封禁", permanent) { permanent = it }
+            if (cooling) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("1天", "3天", "7天", "自定义").forEach { value ->
+                    FilterChip(selected = preset == value, onClick = {
+                        preset = value
+                        if (value != "自定义") { days = value.removeSuffix("天"); hours = "0"; minutes = "0"; seconds = "0"; mode = durationMode }
+                    }, label = { Text(value) })
+                }
+            }
             AnimatedVisibility(!permanent) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Choice("填写方式", listOf("填写封禁时长", "填写预计解封时间"), mode) { next ->
-                    if (next == "填写预计解封时间") end = calculated?.takeIf { it > start } ?: (start + 1000)
+                if (!cooling || preset == "自定义") Choice("填写方式", listOf(durationMode, dateMode), mode) { next ->
+                    if (next == dateMode) end = calculated?.takeIf { it > start } ?: (start + 1000)
                     else { val s = ((end - start) / 1000).coerceAtLeast(1); days = (s / 86400).toString(); hours = (s % 86400 / 3600).toString(); minutes = (s % 3600 / 60).toString(); seconds = (s % 60).toString() }; mode = next
                 }
-                if (mode == "填写封禁时长") Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if ((!cooling || preset == "自定义") && mode == durationMode) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Numeric("天", days, Modifier.weight(1f)) { days = it }; Numeric("小时", hours, Modifier.weight(1f)) { hours = it } }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Numeric("分钟", minutes, Modifier.weight(1f)) { minutes = it }; Numeric("秒", seconds, Modifier.weight(1f)) { seconds = it } }
                 }
-                else DateAction("预计解封时间", end) { end = it }
-                Text(calculated?.let { "预计解封 ${formatted(it)}\n封禁时长 ${durationText(it - start)}" } ?: "请填写有效封禁时长", color = Gold)
-                Choice("到期提醒", ReminderLabels, reminder) { reminder = it }
+                else if (mode == dateMode) DateAction(if (cooling) "冷号结束时间" else "预计解封时间", end) { end = it }
+                Text(calculated?.let { "${if (cooling) "冷号结束" else "预计解封"} ${formatted(it)}\n${label}时长 ${durationText(it - start)}" } ?: "请填写有效${label}时长", color = Gold)
+                if (cooling) Toggle("冷号完成通知", reminder != ReminderLabels[0]) { reminder = ReminderLabels[if (it) 1 else 0] }
+                else Choice("到期提醒", ReminderLabels, reminder) { reminder = it }
             } }
-            Field("封禁原因（选填）", reason) { reason = it }; Field("备注（选填）", note, false) { note = it }
+            Field("${label}原因（选填）", reason) { reason = it }; Field("备注（选填）", note, false) { note = it }
             Text("附件截图", color = Gold)
             existing.filterNot { removed.contains(it.optString("id")) }.forEach { a -> Screenshot(File(Backup.directory(this@MainActivity), a.optString("file"))); Action("移除此附件") { removed.add(a.optString("id")) } }
             added.toList().forEach { file -> Screenshot(file); Action("移除此附件") { added.remove(file); file.delete() } }
@@ -773,18 +817,18 @@ class MainActivity : ComponentActivity() {
             Error(error)
             Action("保存", !copying) {
                 try {
-                    require(start <= System.currentTimeMillis()) { "封禁开始时间不能晚于当前时间" }
-                    val finalEnd = if (permanent) 0L else requireNotNull(calculated) { "请填写有效封禁时长" }
-                    require(permanent || finalEnd > start) { "解封时间必须晚于封禁开始时间" }
+                    require(start <= System.currentTimeMillis()) { "${label}开始时间不能晚于当前时间" }
+                    val finalEnd = if (permanent) 0L else requireNotNull(calculated) { "请填写有效${label}时长" }
+                    require(permanent || finalEnd > start) { "结束时间必须晚于${label}开始时间" }
                     require(e.old == null || e.old.optLong("confirmed") == 0L || start <= e.old.optLong("confirmed")) { "封禁开始时间不能晚于解封确认时间" }
                     requiredLength(reason); requiredLength(note)
                     val id = e.old?.optString("id") ?: Store.uuid()
-                    require(store.one("SELECT id FROM bans WHERE roleId=? AND start=? AND end=? AND permanent=? AND id<>?", e.role, start.toString(), finalEnd.toString(), if (permanent) "1" else "0", id) == null) { "同一角色已存在相同时间的封禁" }
+                    require(store.one("SELECT id FROM bans WHERE roleId=? AND start=? AND end=? AND permanent=? AND kind=? AND id<>?", e.role, start.toString(), finalEnd.toString(), if (permanent) "1" else "0", if (cooling) "cooldown" else "ban", id) == null) { "同一角色已存在相同时间的${label}记录" }
                     val db = store.writableDatabase; val moved = mutableListOf<Pair<File, File>>()
                     db.beginTransaction()
                     try {
                         // UPDATE preserves attachment relationships; REPLACE would cascade-delete them.
-                        if (e.old == null) db.execSQL("INSERT INTO bans(id,roleId,start,end,permanent,confirmed,reason,note,remind,created) VALUES(?,?,?,?,?,?,?,?,?,?)", arrayOf(id, e.role, start, finalEnd, if (permanent) 1 else 0, 0, reason.trim(), note.trim(), if (permanent) 0 else ReminderLabels.indexOf(reminder), System.currentTimeMillis()))
+                        if (e.old == null) db.execSQL("INSERT INTO bans(id,roleId,start,end,permanent,confirmed,reason,note,remind,created,kind) VALUES(?,?,?,?,?,?,?,?,?,?,?)", arrayOf(id, e.role, start, finalEnd, if (permanent) 1 else 0, 0, reason.trim(), note.trim(), if (permanent) 0 else ReminderLabels.indexOf(reminder), System.currentTimeMillis(), if (cooling) "cooldown" else "ban"))
                         else db.execSQL("UPDATE bans SET start=?,end=?,permanent=?,reason=?,note=?,remind=? WHERE id=?", arrayOf(start, finalEnd, if (permanent) 1 else 0, reason.trim(), note.trim(), if (permanent) 0 else ReminderLabels.indexOf(reminder), id))
                         removed.forEach { db.delete("attachments", "id=?", arrayOf(it)) }
                         added.forEach { source -> val name = Store.uuid() + ".img"; val target = File(Backup.directory(this@MainActivity), name); java.nio.file.Files.move(source.toPath(), target.toPath()); moved.add(source to target); db.execSQL("INSERT INTO attachments VALUES(?,?,?,?)", arrayOf(Store.uuid(), id, name, "image/*")) }
@@ -835,7 +879,7 @@ private sealed interface Editor {
     data class Game(val old: JSONObject? = null) : Editor
     data class Role(val account: String, val old: JSONObject? = null) : Editor
     data class Region(val game: String, val old: JSONObject? = null) : Editor
-    data class Ban(val role: String, val old: JSONObject? = null) : Editor
+    data class Ban(val role: String, val old: JSONObject? = null, val cooldown: Boolean = old?.isCooldown() == true) : Editor
 }
 private class AvatarDraft {
     var file by mutableStateOf<File?>(null)
@@ -848,6 +892,8 @@ private fun requiredLength(value: String) { require(value.length <= 10000) { "�
 private fun required(value: String, label: String) { require(value.isNotBlank()) { "请填写$label" }; requiredLength(value) }
 private fun durationText(millis: Long) = (millis / 1000).let { "${it / 86400}天 ${it % 86400 / 3600}小时 ${it % 3600 / 60}分钟 ${it % 60}秒" }
 private fun remaining(b: JSONObject, now: Long = System.currentTimeMillis()): String = when (status(b, now)) {
+    Cooling -> "冷号剩余 " + BanTime.remaining(b.optLong("end"), now)
+    Cooled -> Cooled
     BanTime.ACTIVE -> BanTime.remaining(b.optLong("end"), now)
     BanTime.PERMANENT -> "永久封禁"; BanTime.CONFIRMED -> "已解封"; else -> "已到预计解封时间"
 }

@@ -55,7 +55,7 @@ public final class Backup {
     static boolean safeName(String f) { return f.matches("[a-zA-Z0-9_-]{1,100}\\.(jpg|png|webp|gif|img)"); }
     static void validate(JSONObject root,Map<String,File> files) throws Exception {
         int version=root.getInt("version");
-        if(!"chendian-backup".equals(root.getString("format"))||version<1||version>4)throw new IOException("不是支持的封禁手册备份（版本 1–4）");
+        if(!"chendian-backup".equals(root.getString("format"))||version<1||version>5)throw new IOException("不是支持的封禁手册备份（版本 1–5）");
         if(version<4)root.put("avatars",new JSONArray());
         Map<String,Set<String>> ids=new HashMap<>();
         for(String table:Store.TABLES) {
@@ -84,8 +84,12 @@ public final class Backup {
                         if(version==1)required(row,"roleId");
                         break;
                     case "bans":
+                        if(version<5)row.put("kind","ban");
+                        String kind=row.getString("kind");
+                        if(!kind.equals("ban")&&!kind.equals("cooldown"))throw new IOException("未知记录类型");
                         ref(ids,"roles",row,"roleId");long start=row.getLong("start"),end=row.getLong("end"),confirmed=row.getLong("confirmed");
                         int p=row.getInt("permanent"),m=row.getInt("remind");
+                        if(kind.equals("cooldown")&&(p!=0||confirmed!=0||(m!=0&&m!=1)))throw new IOException("冷号时间或提醒配置无效");
                         if(start<=0||start>System.currentTimeMillis()+60000||confirmed<0||(confirmed>0&&confirmed<start)||row.getLong("created")<=0||(p!=0&&p!=1)||(p==0&&end<=start)||(p==1&&end!=0)||m<0||m>3||(p==1&&m!=0))throw new IOException("封禁时间或提醒配置无效");
                         row.getString("reason");row.getString("note");break;
                     case "attachments": ref(ids,"bans",row,"banId");String f=required(row,"file");
@@ -145,7 +149,7 @@ public final class Backup {
                                 role.put(source,target);break;
                             case "bans":
                                 String rid=role.get(row.getString("roleId"));
-                                JSONObject old=s.one("SELECT id FROM bans WHERE roleId=? AND start=? AND end=? AND permanent=? AND reason=? AND note=?",rid,row.getString("start"),row.getString("end"),row.getString("permanent"),row.getString("reason"),row.getString("note"));
+                                JSONObject old=s.one("SELECT id FROM bans WHERE roleId=? AND start=? AND end=? AND permanent=? AND reason=? AND note=? AND kind=?",rid,row.getString("start"),row.getString("end"),row.getString("permanent"),row.getString("reason"),row.getString("note"),row.getString("kind"));
                                 if(old!=null)target=old.getString("id");
                                 else { target=s.one("SELECT id FROM bans WHERE id=?",source)==null?source:Store.uuid();row.put("id",target).put("roleId",rid);insert(db,table,row);imported++; }
                                 ban.put(source,target);break;

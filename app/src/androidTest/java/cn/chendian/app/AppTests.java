@@ -70,7 +70,7 @@ public class AppTests extends Instrumentation {
             check(!androidRole.equals(iosRole),"same ID on different platforms stays separate");
             insert(s,"cross-ban",blank1,now-3600000,now+3600000,0,now);insert(s,"android-ban",androidRole,now-3600000,now+3600000,0,now);insert(s,"ios-ban",iosRole,now-3600000,now+3600000,0,now);
             ByteArrayOutputStream platformOut=new ByteArrayOutputStream();Backup.write(isolated,s,platformOut);byte[] platformBackup=platformOut.toByteArray();
-            check(s.snapshot().getInt("version")==4,"new backup version");
+            check(s.snapshot().getInt("version")==5,"new backup version");
             check(Backup.restore(isolated,s,new ByteArrayInputStream(platformBackup),false)==0,"v2 merge matches blank ID by nickname");
             check(s.query("SELECT * FROM roles WHERE accountId=?",player).size()==4,"v2 merge keeps all distinct roles");
             check(Backup.restore(isolated,s,new ByteArrayInputStream(platformBackup),true)==3,"v2 replace restores platform records");
@@ -103,6 +103,27 @@ public class AppTests extends Instrumentation {
             JSONObject legacy3=s.snapshot();legacy3.put("version",3);legacy3.remove("avatars");
             check(Backup.restore(isolated,s,new ByteArrayInputStream(zip("manifest.json",legacy3.toString().getBytes("UTF-8"))),true)==4,"v3 backup without avatars remains importable");
             check(s.query("SELECT * FROM avatars").isEmpty(),"old backup restores without phantom avatars");
+            // A cooldown and a ban with identical times remain separate and both stay current.
+            JSONObject original=s.ban("cross-ban");
+            String cold="cooldown-test";
+            s.getWritableDatabase().execSQL("INSERT INTO bans(id,roleId,start,end,permanent,confirmed,reason,note,remind,created,kind) VALUES(?,?,?,?,0,0,'','',1,?,'cooldown')",new Object[]{cold,original.getString("roleId"),original.getLong("start"),original.getLong("end"),now+1});
+            check(s.currentIds().contains(cold)&&s.currentIds().contains("cross-ban"),"cooldown cannot supersede a ban");
+            check(s.query("SELECT * FROM bans WHERE kind='ban'").size()==4,"cooldown excluded from ban count");
+            ByteArrayOutputStream coldOut=new ByteArrayOutputStream();Backup.write(isolated,s,coldOut);
+            check(Backup.restore(isolated,s,new ByteArrayInputStream(coldOut.toByteArray()),false)==0,"cooldown backup merge idempotent and type aware");
+            check(Backup.restore(isolated,s,new ByteArrayInputStream(coldOut.toByteArray()),true)==5,"cooldown backup replacement");
+            check(s.ban(cold).getString("kind").equals("cooldown"),"backup retains cooldown type");
+            JSONObject invalidCooldown=s.snapshot();
+            for(int i=0;i<invalidCooldown.getJSONArray("bans").length();i++) {
+                JSONObject record=invalidCooldown.getJSONArray("bans").getJSONObject(i);
+                if(record.getString("kind").equals("cooldown"))record.put("permanent",1).put("end",0).put("remind",0);
+            }
+            boolean invalidCold=false;try{Backup.validate(invalidCooldown,new HashMap<>());}catch(Exception expected){invalidCold=true;}
+            check(invalidCold,"permanent cooldown backup rejected");
+            // Superseded cooldowns do not leave pending reminders.
+            s.getWritableDatabase().execSQL("INSERT INTO bans(id,roleId,start,end,created,kind) VALUES('new-cold',?,?,?,?,'cooldown')",new Object[]{original.getString("roleId"),now,now+86400000,now+2});
+            check(!s.currentIds().contains(cold)&&s.currentIds().contains("new-cold")&&s.currentIds().contains("cross-ban"),"new cooldown only supersedes previous cooldown");
+
         }finally{target.deleteDatabase(name);remove(testRoot);}
         migrationTest(target);
     }
@@ -114,10 +135,10 @@ public class AppTests extends Instrumentation {
                 for(String sql:schema.split(";"))if(!sql.trim().isEmpty())legacy.execSQL(sql);
                 legacy.execSQL("INSERT INTO accounts VALUES('a','QQ','123','旧账号')");legacy.execSQL("INSERT INTO games VALUES('g','王者荣耀')");
                 legacy.execSQL("INSERT INTO regions VALUES('z','g','安卓一区')");legacy.execSQL("INSERT INTO roles VALUES('r','a','z','888','')");
-                legacy.execSQL("INSERT INTO bans VALUES('b','r',100,9999,0,0,'','',1,100)");legacy.execSQL("INSERT INTO attachments VALUES('shot','b','old.img','image/png')");legacy.setVersion(1);
+                legacy.execSQL("INSERT INTO bans(id,roleId,start,end,permanent,confirmed,reason,note,remind,created) VALUES('b','r',100,9999,0,0,'','',1,100)");legacy.execSQL("INSERT INTO attachments VALUES('shot','b','old.img','image/png')");legacy.setVersion(1);
             }
             try(Store upgraded=new Store(target,name)) {
-                check(upgraded.getReadableDatabase().getVersion()==4,"Android database upgraded");
+                check(upgraded.getReadableDatabase().getVersion()==5,"Android database upgraded");
                 check(upgraded.ban("b").getString("region").equals("安卓一区"),"Android upgrade preserves old region");
                 check(upgraded.query("SELECT * FROM attachments").size()==1,"Android upgrade preserves attachment metadata");
                 check(upgraded.query("PRAGMA foreign_key_check").isEmpty(),"Android upgrade relationships valid");
@@ -127,7 +148,7 @@ public class AppTests extends Instrumentation {
             }
         } finally { target.deleteDatabase(name); }
     }
-    static void insert(Store s,String id,String role,long start,long end,int permanent,long created){s.getWritableDatabase().execSQL("INSERT INTO bans VALUES(?,?,?,?,?,0,'','',0,?)",new Object[]{id,role,start,end,permanent,created});}
+    static void insert(Store s,String id,String role,long start,long end,int permanent,long created){s.getWritableDatabase().execSQL("INSERT INTO bans(id,roleId,start,end,permanent,confirmed,reason,note,remind,created) VALUES(?,?,?,?,?,0,'','',0,?)",new Object[]{id,role,start,end,permanent,created});}
     static byte[] zip(String name,byte[] bytes)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();try(ZipOutputStream zip=new ZipOutputStream(out)){zip.putNextEntry(new ZipEntry(name));zip.write(bytes);zip.closeEntry();}return out.toByteArray();}
     static void remove(File f){File[] children=f.listFiles();if(children!=null)for(File c:children)remove(c);f.delete();}
 }

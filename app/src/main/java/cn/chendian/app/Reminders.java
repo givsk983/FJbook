@@ -9,10 +9,14 @@ import java.util.*;
 
 public final class Reminders {
     public static final String CHANNEL="ban_expiry";
+    public static final String COOLDOWN_CHANNEL="cooldown_expiry";
     public static void channel(Context c) {
         NotificationChannel ch=new NotificationChannel(CHANNEL,"预计解封提醒",NotificationManager.IMPORTANCE_DEFAULT);
         ch.setDescription("到期当天及提前一天的预计解封提醒");
         c.getSystemService(NotificationManager.class).createNotificationChannel(ch);
+        NotificationChannel cooldown=new NotificationChannel(COOLDOWN_CHANNEL,"冷号完成通知",NotificationManager.IMPORTANCE_DEFAULT);
+        cooldown.setDescription("高风险冷号期结束时通知");
+        c.getSystemService(NotificationManager.class).createNotificationChannel(cooldown);
     }
     static PendingIntent pending(Context c,String id,int phase,long end) {
         Intent i=new Intent(c,ReminderReceiver.class).setData(Uri.parse("chendian://reminder/"+id+"/"+phase)).putExtra("id",id).putExtra("phase",phase).putExtra("end",end);
@@ -38,6 +42,7 @@ public final class Reminders {
             if(!current.contains(id)||b.optInt("permanent")==1||b.optLong("confirmed")>0){cancel(c,id);continue;}
             long end=b.optLong("end");int mode=b.optInt("remind");
             for(int phase=0;phase<2;phase++) {
+                if("cooldown".equals(b.optString("kind"))&&phase!=0)continue;
                 if((mode & (phase==0?1:2))==0)continue;
                 long at=end-(phase==1?86400000L:0);
                 if(phase==1 && at<=now)continue;
